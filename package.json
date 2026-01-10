@@ -1,0 +1,24 @@
+{
+  "name": "yams-blackboard",
+  "version": "0.1.0",
+  "description": "YAMS Blackboard plugin for OpenCode - agent-to-agent communication via shared memory",
+  "main": "index.ts",
+  "type": "module",
+  "dependencies": {
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "latest",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "yams",
+    "blackboard",
+    "multi-agent",
+    "ai-agents"
+  ],
+  "author": "",
+  "license": "MIT"
+}
