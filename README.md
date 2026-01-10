@@ -216,3 +216,12 @@ Based on research into multi-agent communication patterns:
 ## License
 
 MIT
+# Build instructions
+
+Build with external dependencies (do not bundle zod):
+
+```bash
+bun build index.ts --outdir . --target node --external zod --external "@opencode-ai/plugin"
+```
+
+Then copy `index.js` to `.opencode/plugin/yams-blackboard.js`
