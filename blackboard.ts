@@ -18,7 +18,10 @@ import type {
   BlackboardStats,
 } from "./types"
 
-type Shell = (strings: TemplateStringsArray, ...values: any[]) => { text(): Promise<string> }
+// Shell type from OpenCode plugin context
+type Shell = {
+  (strings: TemplateStringsArray, ...values: any[]): { text(): Promise<string> }
+}
 
 export class YamsBlackboard {
   private sessionName?: string
@@ -47,19 +50,30 @@ export class YamsBlackboard {
   }
 
   private sessionArg(): string {
-    return this.sessionName ? `--session "${this.sessionName}"` : ""
+    return this.sessionName ? `--session ${this.sessionName}` : ""
   }
 
-  private async yams(cmd: string): Promise<string> {
+  // Shell escape a string for safe inclusion in shell commands
+  private shellEscape(s: string): string {
+    return `'${s.replace(/'/g, "'\\''")}'`
+  }
+
+  // Execute a shell command string
+  private async shell(cmd: string): Promise<string> {
     try {
-      const fullCmd = `yams ${cmd}`
-      const result = await this.$`${fullCmd}`.text()
+      const result = await this.$`sh -c ${cmd}`.text()
       return result.trim()
     } catch (e: any) {
-      throw new Error(`YAMS command failed: ${e.message}`)
+      throw new Error(`Shell command failed: ${e.message}`)
     }
   }
 
+  // Execute a yams command
+  private async yams(cmd: string): Promise<string> {
+    return this.shell(`yams ${cmd}`)
+  }
+
+  // Execute yams and parse JSON response
   private async yamsJson<T>(cmd: string): Promise<T> {
     const result = await this.yams(`${cmd} --json`)
     try {
@@ -67,6 +81,13 @@ export class YamsBlackboard {
     } catch {
       throw new Error(`Failed to parse YAMS JSON response: ${result}`)
     }
+  }
+
+  // Store content via yams add with piping
+  private async yamsStore(content: string, name: string, tags: string, extraArgs: string = ""): Promise<string> {
+    const escaped = this.shellEscape(content)
+    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} ${extraArgs}`
+    return this.shell(cmd)
   }
 
   // ===========================================================================
@@ -108,7 +129,7 @@ export class YamsBlackboard {
       ...agent.capabilities.map(c => `capability:${c}`),
     ].join(",")
 
-    await this.$`echo ${content} | yams add - --name "agents/${agent.id}.json" --tags "${tags}" ${this.sessionArg()}`.text()
+    await this.yamsStore(content, `agents/${agent.id}.json`, tags, this.sessionArg())
 
     return full
   }
@@ -143,7 +164,7 @@ export class YamsBlackboard {
     if (agent) {
       agent.status = status
       const content = JSON.stringify(agent, null, 2)
-      await this.$`echo ${content} | yams add - --name "agents/${agentId}.json" --tags "agent"`.text()
+      await this.yamsStore(content, `agents/${agentId}.json`, "agent")
     }
   }
 
@@ -209,7 +230,7 @@ ${finding.content}
     const tags = this.buildFindingTags(finding)
     const name = `findings/${finding.topic}/${id}.md`
 
-    await this.$`echo ${md} | yams add - --name "${name}" --tags "${tags}" ${this.sessionArg()}`.text()
+    await this.yamsStore(md, name, tags, this.sessionArg())
 
     return finding
   }
@@ -344,7 +365,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
-    await this.$`echo ${content} | yams add - --name "tasks/${id}.json" --tags "${tags}" ${this.sessionArg()}`.text()
+    await this.yamsStore(content, `tasks/${id}.json`, tags, this.sessionArg())
 
     return task
   }
@@ -413,7 +434,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
-    await this.$`echo ${content} | yams add - --name "tasks/${taskId}.json" --tags "${tags}"`.text()
+    await this.yamsStore(content, `tasks/${taskId}.json`, tags)
 
     return task
   }
@@ -430,7 +451,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
-    await this.$`echo ${content} | yams add - --name "tasks/${taskId}.json" --tags "${tags}"`.text()
+    await this.yamsStore(content, `tasks/${taskId}.json`, tags)
 
     return task
   }
@@ -470,7 +491,7 @@ ${finding.content}
     }
 
     const content = JSON.stringify(context, null, 2)
-    await this.$`echo ${content} | yams add - --name "contexts/${id}.json" --tags "context,status:active"`.text()
+    await this.yamsStore(content, `contexts/${id}.json`, "context,status:active")
 
     return context
   }

@@ -20,6 +20,7 @@ import {
   ReferenceSchema,
 } from "./types"
 
+// Named export for explicit imports
 export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) => {
   // Initialize blackboard (session will be started on session.created hook)
   let blackboard = new YamsBlackboard($, { defaultScope: "persistent" })
@@ -583,3 +584,6 @@ ${JSON.stringify(graph.nodes, null, 2)}`
     },
   }
 }
+
+// Default export for OpenCode auto-discovery
+export default YamsBlackboardPlugin
