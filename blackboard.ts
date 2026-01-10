@@ -19,8 +19,15 @@ import type {
 } from "./types"
 
 // Shell type from OpenCode plugin context
+// Returns object with stdout/stderr, not .text() method
+type ShellResult = {
+  stdout: string
+  stderr: string
+  exitCode: number
+}
+
 type Shell = {
-  (strings: TemplateStringsArray, ...values: any[]): { text(): Promise<string> }
+  (strings: TemplateStringsArray, ...values: any[]): Promise<ShellResult>
 }
 
 export class YamsBlackboard {
@@ -61,8 +68,8 @@ export class YamsBlackboard {
   // Execute a shell command string
   private async shell(cmd: string): Promise<string> {
     try {
-      const result = await this.$`sh -c ${cmd}`.text()
-      return result.trim()
+      const result = await this.$`sh -c ${cmd}`
+      return (result.stdout || "").trim()
     } catch (e: any) {
       throw new Error(`Shell command failed: ${e.message}`)
     }
