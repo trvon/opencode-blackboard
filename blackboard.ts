@@ -30,7 +30,7 @@ type ShellResult = string | {
 }
 
 type Shell = {
-  (strings: TemplateStringsArray, ...values: any[]): Promise<ShellResult>
+  (strings: TemplateStringsArray, ...values: any[]): Promise<ShellResult> & { quiet(): Promise<ShellResult> }
 }
 
 export class YamsBlackboard {
@@ -82,8 +82,8 @@ export class YamsBlackboard {
   // Redirects stderr to stdout and captures all output to avoid TUI pollution
   private async shell(cmd: string): Promise<string> {
     try {
-      // Redirect stderr to stdout to capture all output, suppress terminal output
-      const result = await this.$`sh -c ${cmd + ' 2>&1'}`
+      // Redirect stderr to stdout and use .quiet() to suppress TUI output
+      const result = await this.$`sh -c ${cmd + ' 2>&1'}`.quiet()
 
       // Handle different return types from Bun shell
       if (typeof result === 'string') {
