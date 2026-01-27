@@ -1,0 +1,26 @@
+services:
+  yams:
+    image: ghcr.io/trvon/yams:latest
+    command: ["yams", "daemon", "start", "--foreground"]
+    healthcheck:
+      test: ["CMD-SHELL", "yams status || exit 1"]
+      interval: 3s
+      timeout: 10s
+      retries: 15
+      start_period: 5s
+    ports:
+      - "9933:9933"
+
+  tests:
+    image: oven/bun:latest
+    depends_on:
+      yams:
+        condition: service_healthy
+    environment:
+      - YAMS_INTEGRATION=1
+      - YAMS_HOST=yams
+      - YAMS_PORT=9933
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: sh -c "bun install && bun test __tests__/integration.test.ts"

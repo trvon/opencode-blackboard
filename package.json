@@ -1,14 +1,28 @@
 {
   "name": "yams-blackboard",
-  "version": "0.1.0",
+  "version": "1.0.4",
   "description": "YAMS Blackboard plugin for OpenCode - agent-to-agent communication via shared memory",
-  "main": "index.ts",
+  "main": "index.js",
+  "types": "index.d.ts",
   "type": "module",
+  "scripts": {
+    "build": "bun build index.ts --outdir . --target node --external zod --external @opencode-ai/plugin",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test __tests__/plugin.test.ts __tests__/blackboard.test.ts",
+    "test:integration": "YAMS_INTEGRATION=1 bun test __tests__/integration.test.ts",
+    "test:all": "bun test"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "DESIGN.md"
+  ],
   "dependencies": {
-    "zod": "^3.23.0"
+    "@opencode-ai/plugin": "^1.1.0",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "latest",
+    "bun-types": "^1.1.0",
     "typescript": "^5.0.0"
   },
   "keywords": [

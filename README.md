@@ -1,6 +1,8 @@
 # YAMS Blackboard Plugin for OpenCode
 
-A **blackboard architecture** plugin enabling agent-to-agent communication through [YAMS](https://github.com/yams-project/yams) as shared memory.
+> **EXPERIMENTAL SOFTWARE** - This plugin is under active development. APIs may change without notice. Use at your own risk.
+
+A **blackboard architecture** plugin enabling agent-to-agent communication through [YAMS](https://github.com/trvon/yams) as shared memory.
 
 ## Overview
 
@@ -24,42 +26,36 @@ This plugin implements the classic [blackboard pattern](https://en.wikipedia.org
 
 ## Installation
 
-### 1. As a local plugin (recommended)
+### 1. Install YAMS
 
-Copy to your project's `.opencode/plugin/` directory:
-
-```bash
-mkdir -p .opencode/plugin/yams-blackboard
-cp -r * .opencode/plugin/yams-blackboard/
-```
-
-### 2. Add dependencies
-
-In your `.opencode/package.json`:
-
-```json
-{
-  "dependencies": {
-    "@opencode-ai/plugin": "^1.1.0",
-    "zod": "^3.23.0"
-  }
-}
-```
-
-Then run:
+Install the YAMS daemon from [github.com/trvon/yams](https://github.com/trvon/yams):
 
 ```bash
-cd .opencode && bun install
+# macOS
+brew install trvon/tap/yams
+
+# Or build from source (see YAMS repo for instructions)
 ```
 
-### 3. Ensure YAMS is running
-
-The plugin communicates with YAMS via CLI. Make sure the YAMS daemon is running:
+Start the daemon:
 
 ```bash
 yams daemon start
-yams status
+yams status  # Should show "running"
 ```
+
+### 2. Add Plugin to OpenCode
+
+Add to your `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["yams-blackboard"]
+}
+```
+
+OpenCode automatically installs npm plugins at startup. No manual build or copy required.
 
 ## Tools
 
@@ -212,6 +208,40 @@ Based on research into multi-agent communication patterns:
 - **Blackboard Pattern**: Shared memory over direct messaging for loose coupling
 - **A2A Protocol Concepts**: Structured findings with lifecycle states
 - **Task Coordination**: Claim-based work distribution with dependencies
+
+## Development (Contributors Only)
+
+This section is for contributors developing the plugin itself. Users should install via npm as described above.
+
+```bash
+bun install        # Install dependencies
+bun run build      # Compile index.ts to index.js
+bun run typecheck  # Type check
+bun test           # Run tests
+```
+
+## Troubleshooting
+
+### "YAMS daemon not running"
+
+```bash
+yams daemon start
+yams status  # Should show "running"
+```
+
+### "Command 'yams' not found"
+
+YAMS must be installed and in your PATH. See [Installation](#installation).
+
+### Plugin not loading
+
+1. Verify `opencode.json` has `"plugin": ["yams-blackboard"]`
+2. Restart OpenCode to load the plugin
+3. Check OpenCode logs for plugin errors
+
+### Tools not appearing
+
+Start a new session - tools are registered on `session.created`.
 
 ## License
 

@@ -18,7 +18,20 @@ import type {
   BlackboardStats,
 } from "./types"
 
-type Shell = (strings: TemplateStringsArray, ...values: any[]) => { text(): Promise<string> }
+// Shell type from OpenCode plugin context
+// The actual return type varies by OpenCode version
+type ShellResult = string | {
+  stdout?: string | { toString(encoding?: string): string }
+  stderr?: string | { toString(encoding?: string): string }
+  output?: string
+  text?: string | (() => Promise<string>)
+  exitCode?: number
+  toString?(encoding?: string): string
+}
+
+type Shell = {
+  (strings: TemplateStringsArray, ...values: any[]): Promise<ShellResult> & { quiet(): Promise<ShellResult> }
+}
 
 export class YamsBlackboard {
   private sessionName?: string
@@ -47,19 +60,70 @@ export class YamsBlackboard {
   }
 
   private sessionArg(): string {
-    return this.sessionName ? `--session "${this.sessionName}"` : ""
+    return this.sessionName ? `--session ${this.sessionName}` : ""
   }
 
-  private async yams(cmd: string): Promise<string> {
+  // Shell escape a string for safe inclusion in shell commands
+  private shellEscape(s: string): string {
+    return `'${s.replace(/'/g, "'\\''")}'`
+  }
+
+  // Helper to check if value is Buffer-like (has toString method)
+  private isBufferLike(value: unknown): value is { toString(encoding?: string): string } {
+    return (
+      value !== null &&
+      typeof value === 'object' &&
+      typeof (value as any).toString === 'function' &&
+      (value as any).constructor?.name === 'Buffer'
+    )
+  }
+
+  // Execute a shell command string
+  // Redirects stderr to stdout and captures all output to avoid TUI pollution
+  private async shell(cmd: string): Promise<string> {
     try {
-      const fullCmd = `yams ${cmd}`
-      const result = await this.$`${fullCmd}`.text()
-      return result.trim()
+      // Redirect stderr to stdout and use .quiet() to suppress TUI output
+      const result = await this.$`sh -c ${cmd + ' 2>&1'}`.quiet()
+
+      // Handle different return types from Bun shell
+      if (typeof result === 'string') {
+        return result.trim()
+      }
+
+      if (result && typeof result === 'object') {
+        // Get raw output - could be stdout, output, or text property
+        let raw = (result as any).stdout ?? (result as any).output ?? (result as any).text
+
+        // Handle Buffer/Uint8Array - use TextDecoder for reliable decoding
+        if (raw instanceof Uint8Array || Buffer.isBuffer(raw)) {
+          return new TextDecoder().decode(raw).trim()
+        }
+
+        // Handle string
+        if (typeof raw === 'string') {
+          return raw.trim()
+        }
+
+        // Handle function (Response-like .text())
+        if (typeof raw === 'function') {
+          const text = await raw()
+          return typeof text === 'string' ? text.trim() : String(text).trim()
+        }
+      }
+
+      // Fallback: stringify
+      return String(result ?? '').trim()
     } catch (e: any) {
-      throw new Error(`YAMS command failed: ${e.message}`)
+      throw new Error(`Shell command failed: ${e.message}`)
     }
   }
 
+  // Execute a yams command
+  private async yams(cmd: string): Promise<string> {
+    return this.shell(`yams ${cmd}`)
+  }
+
+  // Execute yams and parse JSON response
   private async yamsJson<T>(cmd: string): Promise<T> {
     const result = await this.yams(`${cmd} --json`)
     try {
@@ -67,6 +131,13 @@ export class YamsBlackboard {
     } catch {
       throw new Error(`Failed to parse YAMS JSON response: ${result}`)
     }
+  }
+
+  // Store content via yams add with piping
+  private async yamsStore(content: string, name: string, tags: string, extraArgs: string = ""): Promise<string> {
+    const escaped = this.shellEscape(content)
+    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} ${extraArgs}`
+    return this.shell(cmd)
   }
 
   // ===========================================================================
@@ -108,7 +179,7 @@ export class YamsBlackboard {
       ...agent.capabilities.map(c => `capability:${c}`),
     ].join(",")
 
-    await this.$`echo ${content} | yams add - --name "agents/${agent.id}.json" --tags "${tags}" ${this.sessionArg()}`.text()
+    await this.yamsStore(content, `agents/${agent.id}.json`, tags, this.sessionArg())
 
     return full
   }
@@ -143,7 +214,7 @@ export class YamsBlackboard {
     if (agent) {
       agent.status = status
       const content = JSON.stringify(agent, null, 2)
-      await this.$`echo ${content} | yams add - --name "agents/${agentId}.json" --tags "agent"`.text()
+      await this.yamsStore(content, `agents/${agentId}.json`, "agent")
     }
   }
 
@@ -209,7 +280,7 @@ ${finding.content}
     const tags = this.buildFindingTags(finding)
     const name = `findings/${finding.topic}/${id}.md`
 
-    await this.$`echo ${md} | yams add - --name "${name}" --tags "${tags}" ${this.sessionArg()}`.text()
+    await this.yamsStore(md, name, tags, this.sessionArg())
 
     return finding
   }
@@ -344,7 +415,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
-    await this.$`echo ${content} | yams add - --name "tasks/${id}.json" --tags "${tags}" ${this.sessionArg()}`.text()
+    await this.yamsStore(content, `tasks/${id}.json`, tags, this.sessionArg())
 
     return task
   }
@@ -384,7 +455,7 @@ ${finding.content}
   }
 
   async getReadyTasks(agentCapabilities?: string[]): Promise<Task[]> {
-    const pending = await this.queryTasks({ status: "pending", limit: 100 })
+    const pending = await this.queryTasks({ status: "pending", limit: 100, offset: 0 })
 
     // Filter out tasks with unmet dependencies
     const ready: Task[] = []
@@ -413,7 +484,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
-    await this.$`echo ${content} | yams add - --name "tasks/${taskId}.json" --tags "${tags}"`.text()
+    await this.yamsStore(content, `tasks/${taskId}.json`, tags)
 
     return task
   }
@@ -430,7 +501,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
-    await this.$`echo ${content} | yams add - --name "tasks/${taskId}.json" --tags "${tags}"`.text()
+    await this.yamsStore(content, `tasks/${taskId}.json`, tags)
 
     return task
   }
@@ -470,7 +541,7 @@ ${finding.content}
     }
 
     const content = JSON.stringify(context, null, 2)
-    await this.$`echo ${content} | yams add - --name "contexts/${id}.json" --tags "context,status:active"`.text()
+    await this.yamsStore(content, `contexts/${id}.json`, "context,status:active")
 
     return context
   }
@@ -485,8 +556,8 @@ ${finding.content}
   }
 
   async getContextSummary(contextId: string): Promise<string> {
-    const findings = await this.queryFindings({ context_id: contextId, limit: 100 })
-    const tasks = await this.queryTasks({ context_id: contextId, limit: 100 })
+    const findings = await this.queryFindings({ context_id: contextId, limit: 100, offset: 0 })
+    const tasks = await this.queryTasks({ context_id: contextId, limit: 100, offset: 0 })
     const agents = await this.listAgents()
 
     const activeAgents = agents.filter(a => a.status === "active")
@@ -543,8 +614,8 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
 
   async getStats(): Promise<BlackboardStats> {
     const agents = await this.listAgents()
-    const findings = await this.queryFindings({ limit: 1000 })
-    const tasks = await this.queryTasks({ limit: 1000 })
+    const findings = await this.queryFindings({ limit: 1000, offset: 0 })
+    const tasks = await this.queryTasks({ limit: 1000, offset: 0 })
 
     const findingsByTopic: Record<string, number> = {}
     const findingsByStatus: Record<string, number> = {}

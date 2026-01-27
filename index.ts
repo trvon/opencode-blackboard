@@ -20,9 +20,19 @@ import {
   ReferenceSchema,
 } from "./types"
 
+// Compaction hook types
+interface CompactionInput {
+  summary: string
+}
+interface CompactionOutput {
+  context: string[]
+}
+
+// Named export for explicit imports
 export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) => {
   // Initialize blackboard (session will be started on session.created hook)
-  let blackboard = new YamsBlackboard($, { defaultScope: "persistent" })
+  // Cast $ to any to handle Bun shell type differences
+  const blackboard = new YamsBlackboard($ as any, { defaultScope: "persistent" })
   let currentContextId: string | undefined
 
   return {
@@ -32,19 +42,18 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
 
     "session.created": async () => {
       // Start a YAMS session scoped to this conversation
-      const sessionName = await blackboard.startSession()
-      console.log(`[yams-blackboard] Session started: ${sessionName}`)
+      await blackboard.startSession()
     },
 
-    "session.compacted": async (input, output) => {
+    "session.compacted": async (input: CompactionInput, output: CompactionOutput) => {
       // Generate summary of blackboard state for compaction context
       try {
         const contextId = currentContextId || "default"
         const summary = await blackboard.getContextSummary(contextId)
         output.context.push(summary)
-      } catch (e) {
+      } catch {
         // Don't fail compaction if summary generation fails
-        console.error("[yams-blackboard] Failed to generate compaction summary:", e)
+        // Note: Silent failure - console output breaks OpenCode TUI
       }
     },
 
@@ -136,7 +145,7 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
           scope: FindingScope.optional().describe(
             "Persistence: 'persistent' (default) or 'session'"
           ),
-          metadata: z.record(z.string()).optional().describe("Additional key-value metadata"),
+          metadata: z.record(z.string(), z.string()).optional().describe("Additional key-value metadata"),
         },
         async execute(args) {
           const finding = await blackboard.postFinding({
@@ -511,8 +520,8 @@ ${args.set_current !== false ? "(Set as current context)" : ""}`
         },
         async execute(args) {
           const limit = args.limit || 10
-          const findings = await blackboard.queryFindings({ limit })
-          const tasks = await blackboard.queryTasks({ limit })
+          const findings = await blackboard.queryFindings({ limit, offset: 0 })
+          const tasks = await blackboard.queryTasks({ limit, offset: 0 })
 
           const output: string[] = ["## Recent Activity\n"]
 
@@ -583,3 +592,6 @@ ${JSON.stringify(graph.nodes, null, 2)}`
     },
   }
 }
+
+// Default export for OpenCode auto-discovery
+export default YamsBlackboardPlugin
