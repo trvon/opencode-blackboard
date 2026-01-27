@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/trvon/open-code-blackboard/compare/v1.0.1...v1.0.2) (2026-01-27)
+
+
+### Bug Fixes
+
+* add stderr redirect to avoid TUI pollution and expand test coverage ([3622225](https://github.com/trvon/open-code-blackboard/commit/3622225159a956db62897c6cff6fe275e217f844))
+
 ## [1.0.1](https://github.com/trvon/open-code-blackboard/compare/v1.0.0...v1.0.1) (2026-01-27)
 
 
