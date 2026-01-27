@@ -8,14 +8,21 @@
 import { describe, test, expect, mock } from "bun:test"
 import { YamsBlackboardPlugin } from "../index"
 
+// Helper to create a promise with .quiet() method attached (mimics Bun shell behavior)
+function createQuietablePromise<T>(promise: Promise<T>): Promise<T> & { quiet(): Promise<T> } {
+  const quietablePromise = promise as Promise<T> & { quiet(): Promise<T> }
+  quietablePromise.quiet = () => quietablePromise
+  return quietablePromise
+}
+
 // Mock shell function that captures commands
 function createMockShell() {
   const calls: string[] = []
-  const mockShell = mock(async (strings: TemplateStringsArray, ...values: any[]) => {
+  const mockShell = mock((strings: TemplateStringsArray, ...values: any[]) => {
     const cmd = strings.reduce((acc, str, i) => acc + str + (values[i] ?? ""), "")
     calls.push(cmd)
-    // Return empty success response
-    return { stdout: Buffer.from("{}") }
+    // Return empty success response with .quiet() method
+    return createQuietablePromise(Promise.resolve({ stdout: Buffer.from("{}") }))
   })
   return { $: mockShell as any, calls }
 }
@@ -128,9 +135,9 @@ describe("YamsBlackboardPlugin", () => {
   })
 
   test("session.compacted does not output to console on error", async () => {
-    // Create a shell that fails
-    const failingShell = mock(async () => {
-      throw new Error("Mock failure")
+    // Create a shell that fails but still has .quiet() method
+    const failingShell = mock(() => {
+      return createQuietablePromise(Promise.reject(new Error("Mock failure")))
     })
 
     const originalError = console.error

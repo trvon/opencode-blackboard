@@ -8,29 +8,41 @@ import { describe, test, expect, mock } from "bun:test"
 import { YamsBlackboard } from "../blackboard"
 import type { CreateFinding, CreateTask } from "../types"
 
+// Helper to create a promise with .quiet() method attached (mimics Bun shell behavior)
+function createQuietablePromise<T>(promise: Promise<T>): Promise<T> & { quiet(): Promise<T> } {
+  const quietablePromise = promise as Promise<T> & { quiet(): Promise<T> }
+  quietablePromise.quiet = () => quietablePromise
+  return quietablePromise
+}
+
 // Mock shell that returns configurable responses
 function createMockShell(responses: Record<string, unknown> = {}) {
   const calls: string[] = []
   const defaultResponse = { stdout: Buffer.from("{}") }
 
-  const mockShell = mock(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+  const mockShell = mock((strings: TemplateStringsArray, ...values: unknown[]) => {
     const cmd = strings.reduce((acc, str, i) => acc + str + (values[i] ?? ""), "")
     calls.push(cmd)
 
-    // Check if we have a specific response for this command
-    for (const [pattern, response] of Object.entries(responses)) {
-      if (cmd.includes(pattern)) {
-        if (typeof response === "function") {
-          return response(cmd)
+    const resultPromise = (async () => {
+      // Check if we have a specific response for this command
+      for (const [pattern, response] of Object.entries(responses)) {
+        if (cmd.includes(pattern)) {
+          if (typeof response === "function") {
+            return response(cmd)
+          }
+          if (typeof response === "string") {
+            return { stdout: Buffer.from(response) }
+          }
+          return response
         }
-        if (typeof response === "string") {
-          return { stdout: Buffer.from(response) }
-        }
-        return response
       }
-    }
 
-    return defaultResponse
+      return defaultResponse
+    })()
+
+    // Return promise with .quiet() method attached
+    return createQuietablePromise(resultPromise)
   })
 
   return { $: mockShell as ReturnType<typeof createMockShell>["$"], calls }
@@ -81,8 +93,8 @@ describe("YamsBlackboard", () => {
     })
 
     test("handles shell errors gracefully", async () => {
-      const failingShell = mock(async () => {
-        throw new Error("Command not found")
+      const failingShell = mock(() => {
+        return createQuietablePromise(Promise.reject(new Error("Command not found")))
       })
 
       const bb = new YamsBlackboard(failingShell as any)
