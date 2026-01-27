@@ -3,10 +3,11 @@ services:
     image: ghcr.io/trvon/yams:latest
     command: ["yams", "daemon", "start", "--foreground"]
     healthcheck:
-      test: ["CMD", "yams", "status"]
-      interval: 2s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "yams status || exit 1"]
+      interval: 3s
+      timeout: 10s
+      retries: 15
+      start_period: 5s
     ports:
       - "9933:9933"
 
@@ -22,4 +23,4 @@ services:
     volumes:
       - .:/app
     working_dir: /app
-    command: bun test __tests__/integration.test.ts
+    command: sh -c "bun install && bun test __tests__/integration.test.ts"
