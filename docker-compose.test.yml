@@ -1,0 +1,26 @@
+services:
+  yams:
+    build:
+      context: .
+      args:
+        YAMS_VERSION: latest
+    healthcheck:
+      test: ["CMD", "yams", "status"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "9933:9933"
+
+  tests:
+    image: oven/bun:latest
+    depends_on:
+      yams:
+        condition: service_healthy
+    environment:
+      - YAMS_HOST=yams
+      - YAMS_PORT=9933
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: bun test:integration

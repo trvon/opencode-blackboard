@@ -93,7 +93,7 @@ export const FindingSchema = z.object({
   ttl: z.number().int().positive().optional().describe("TTL in seconds for session-scoped"),
 
   // Metadata
-  metadata: z.record(z.string()).optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
 })
 
 export type Finding = z.infer<typeof FindingSchema>
@@ -186,7 +186,7 @@ export const TaskSchema = z.object({
   max_retries: z.number().int().nonnegative().optional(),
 
   // Metadata
-  metadata: z.record(z.string()).optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
 })
 
 export type Task = z.infer<typeof TaskSchema>

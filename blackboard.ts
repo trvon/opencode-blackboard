@@ -19,11 +19,14 @@ import type {
 } from "./types"
 
 // Shell type from OpenCode plugin context
-// Returns object with stdout/stderr, not .text() method
-type ShellResult = {
-  stdout: string
-  stderr: string
-  exitCode: number
+// The actual return type varies by OpenCode version
+type ShellResult = string | {
+  stdout?: string | { toString(encoding?: string): string }
+  stderr?: string | { toString(encoding?: string): string }
+  output?: string
+  text?: string | (() => Promise<string>)
+  exitCode?: number
+  toString?(encoding?: string): string
 }
 
 type Shell = {
@@ -65,11 +68,49 @@ export class YamsBlackboard {
     return `'${s.replace(/'/g, "'\\''")}'`
   }
 
+  // Helper to check if value is Buffer-like (has toString method)
+  private isBufferLike(value: unknown): value is { toString(encoding?: string): string } {
+    return (
+      value !== null &&
+      typeof value === 'object' &&
+      typeof (value as any).toString === 'function' &&
+      (value as any).constructor?.name === 'Buffer'
+    )
+  }
+
   // Execute a shell command string
   private async shell(cmd: string): Promise<string> {
     try {
       const result = await this.$`sh -c ${cmd}`
-      return (result.stdout || "").trim()
+
+      // Handle different return types from Bun shell
+      if (typeof result === 'string') {
+        return result.trim()
+      }
+
+      if (result && typeof result === 'object') {
+        // Get raw output - could be stdout, output, or text property
+        let raw = (result as any).stdout ?? (result as any).output ?? (result as any).text
+
+        // Handle Buffer/Uint8Array - use TextDecoder for reliable decoding
+        if (raw instanceof Uint8Array || Buffer.isBuffer(raw)) {
+          return new TextDecoder().decode(raw).trim()
+        }
+
+        // Handle string
+        if (typeof raw === 'string') {
+          return raw.trim()
+        }
+
+        // Handle function (Response-like .text())
+        if (typeof raw === 'function') {
+          const text = await raw()
+          return typeof text === 'string' ? text.trim() : String(text).trim()
+        }
+      }
+
+      // Fallback: stringify
+      return String(result ?? '').trim()
     } catch (e: any) {
       throw new Error(`Shell command failed: ${e.message}`)
     }
@@ -412,7 +453,7 @@ ${finding.content}
   }
 
   async getReadyTasks(agentCapabilities?: string[]): Promise<Task[]> {
-    const pending = await this.queryTasks({ status: "pending", limit: 100 })
+    const pending = await this.queryTasks({ status: "pending", limit: 100, offset: 0 })
 
     // Filter out tasks with unmet dependencies
     const ready: Task[] = []
@@ -513,8 +554,8 @@ ${finding.content}
   }
 
   async getContextSummary(contextId: string): Promise<string> {
-    const findings = await this.queryFindings({ context_id: contextId, limit: 100 })
-    const tasks = await this.queryTasks({ context_id: contextId, limit: 100 })
+    const findings = await this.queryFindings({ context_id: contextId, limit: 100, offset: 0 })
+    const tasks = await this.queryTasks({ context_id: contextId, limit: 100, offset: 0 })
     const agents = await this.listAgents()
 
     const activeAgents = agents.filter(a => a.status === "active")
@@ -571,8 +612,8 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
 
   async getStats(): Promise<BlackboardStats> {
     const agents = await this.listAgents()
-    const findings = await this.queryFindings({ limit: 1000 })
-    const tasks = await this.queryTasks({ limit: 1000 })
+    const findings = await this.queryFindings({ limit: 1000, offset: 0 })
+    const tasks = await this.queryTasks({ limit: 1000, offset: 0 })
 
     const findingsByTopic: Record<string, number> = {}
     const findingsByStatus: Record<string, number> = {}
