@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/trvon/opencode-blackboard/compare/v1.0.2...v1.0.3) (2026-01-27)
+
+
+### Bug Fixes
+
+* docker-compose healthcheck and chain publish to release-please ([287c47a](https://github.com/trvon/opencode-blackboard/commit/287c47aa7b5860ade2815037ca48a1c962c043a5))
+
 ## [1.0.2](https://github.com/trvon/open-code-blackboard/compare/v1.0.1...v1.0.2) (2026-01-27)
 
 
