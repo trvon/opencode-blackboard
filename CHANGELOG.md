@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.4](https://github.com/trvon/opencode-blackboard/compare/v1.0.3...v1.0.4) (2026-01-27)
+
+
+### Bug Fixes
+
+* mock shell to support .quiet() method for Bun shell compatibility ([312f744](https://github.com/trvon/opencode-blackboard/commit/312f74411d14380e1203bab65fc64abc1f550724))
+* use .quiet() to prevent TUI output leak ([471dc88](https://github.com/trvon/opencode-blackboard/commit/471dc88a3bb0c33c0c5135848b2a192fb7cb5a72))
+
 ## [1.0.3](https://github.com/trvon/opencode-blackboard/compare/v1.0.2...v1.0.3) (2026-01-27)
 
 
