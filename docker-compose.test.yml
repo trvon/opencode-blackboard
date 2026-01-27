@@ -1,9 +1,6 @@
 services:
   yams:
-    build:
-      context: .
-      args:
-        YAMS_VERSION: latest
+    image: ghcr.io/trvon/yams:latest
     healthcheck:
       test: ["CMD", "yams", "status"]
       interval: 2s
@@ -18,9 +15,10 @@ services:
       yams:
         condition: service_healthy
     environment:
+      - YAMS_INTEGRATION=1
       - YAMS_HOST=yams
       - YAMS_PORT=9933
     volumes:
       - .:/app
     working_dir: /app
-    command: bun test:integration
+    command: bun test __tests__/integration.test.ts
