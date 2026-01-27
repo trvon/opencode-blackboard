@@ -79,9 +79,11 @@ export class YamsBlackboard {
   }
 
   // Execute a shell command string
+  // Redirects stderr to stdout and captures all output to avoid TUI pollution
   private async shell(cmd: string): Promise<string> {
     try {
-      const result = await this.$`sh -c ${cmd}`
+      // Redirect stderr to stdout to capture all output, suppress terminal output
+      const result = await this.$`sh -c ${cmd + ' 2>&1'}`
 
       // Handle different return types from Bun shell
       if (typeof result === 'string') {

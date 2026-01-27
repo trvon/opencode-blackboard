@@ -1,6 +1,7 @@
 services:
   yams:
     image: ghcr.io/trvon/yams:latest
+    command: ["yams", "daemon", "start", "--foreground"]
     healthcheck:
       test: ["CMD", "yams", "status"]
       interval: 2s

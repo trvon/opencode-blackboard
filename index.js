@@ -30,7 +30,7 @@ class YamsBlackboard {
   }
   async shell(cmd) {
     try {
-      const result = await this.$`sh -c ${cmd}`;
+      const result = await this.$`sh -c ${cmd + " 2>&1"}`;
       if (typeof result === "string") {
         return result.trim();
       }

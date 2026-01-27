@@ -278,4 +278,104 @@ describe("YamsBlackboard", () => {
       expect(calls.length).toBeGreaterThan(0)
     })
   })
+
+  describe("TUI safety - no console output", () => {
+    test("shell execution does not call console.log", async () => {
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const originalLog = console.log
+      const logCalls: unknown[] = []
+      console.log = (...args: unknown[]) => logCalls.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.listAgents()
+        expect(logCalls.length).toBe(0)
+      } finally {
+        console.log = originalLog
+      }
+    })
+
+    test("shell execution does not call console.error on success", async () => {
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const originalError = console.error
+      const errorCalls: unknown[] = []
+      console.error = (...args: unknown[]) => errorCalls.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.listAgents()
+        expect(errorCalls.length).toBe(0)
+      } finally {
+        console.error = originalError
+      }
+    })
+
+    test("queryFindings returns data without console output", async () => {
+      const mockFindings = {
+        documents: [{ name: "findings/security/f-123.md" }],
+      }
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify(mockFindings)) }),
+        "cat": () => ({ stdout: Buffer.from("---\nid: \"f-123\"\nagent_id: \"test\"\ntopic: \"security\"\nconfidence: 0.9\nstatus: \"published\"\nscope: \"persistent\"\n---\n\n# Test\n\nContent") }),
+      })
+
+      const originalLog = console.log
+      const originalError = console.error
+      const logCalls: unknown[] = []
+      const errorCalls: unknown[] = []
+      console.log = (...args: unknown[]) => logCalls.push(args)
+      console.error = (...args: unknown[]) => errorCalls.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.queryFindings({ limit: 10, offset: 0 })
+        expect(logCalls.length).toBe(0)
+        expect(errorCalls.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("queryTasks returns data without console output", async () => {
+      const mockTasks = { documents: [] }
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify(mockTasks)) }),
+      })
+
+      const originalLog = console.log
+      const originalError = console.error
+      const logCalls: unknown[] = []
+      const errorCalls: unknown[] = []
+      console.log = (...args: unknown[]) => logCalls.push(args)
+      console.error = (...args: unknown[]) => errorCalls.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.queryTasks({ limit: 10, offset: 0 })
+        expect(logCalls.length).toBe(0)
+        expect(errorCalls.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("shell commands include stderr redirect", async () => {
+      const { $, calls } = createMockShell()
+      const bb = new YamsBlackboard($)
+
+      await bb.startSession("test")
+
+      // Verify that 2>&1 is appended for stderr capture
+      const shellCmd = calls.find(c => c.includes("sh -c"))
+      expect(shellCmd).toContain("2>&1")
+    })
+  })
 })
