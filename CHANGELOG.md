@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/trvon/opencode-blackboard/compare/v1.0.0...v1.1.0) (2026-01-27)
+
+
+### Features
+
+* hello world ([ec26f0e](https://github.com/trvon/opencode-blackboard/commit/ec26f0e52edac1a49171c5d9718d5ebbeac004bf))
+
 ## 1.0.0 (2026-01-27)
 
 
