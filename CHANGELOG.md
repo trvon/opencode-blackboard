@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/trvon/opencode-blackboard/compare/v1.1.0...v1.1.1) (2026-01-28)
+
+
+### Bug Fixes
+
+* correct compaction hook types to match Plugin interface ([fc8f670](https://github.com/trvon/opencode-blackboard/commit/fc8f670482f55ce1a344101a8fa6cbb377403c87))
+
 ## [1.1.0](https://github.com/trvon/opencode-blackboard/compare/v1.0.0...v1.1.0) (2026-01-27)
 
 
