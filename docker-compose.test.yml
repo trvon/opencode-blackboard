@@ -1,7 +1,10 @@
 services:
   yams:
-    image: ghcr.io/trvon/yams:latest
-    command: ["yams", "daemon", "start", "--foreground"]
+    # Use official image in CI (when no .env file), local image for development
+    image: ${YAMS_IMAGE:-ghcr.io/trvon/yams:latest}
+    command: ["sh", "-c", "yams init --auto && yams daemon start --foreground"]
+    tty: true
+    stdin_open: true
     healthcheck:
       test: ["CMD-SHELL", "yams status || exit 1"]
       interval: 3s
