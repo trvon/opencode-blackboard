@@ -136,7 +136,7 @@ export class YamsBlackboard {
   // Store content via yams add with piping
   private async yamsStore(content: string, name: string, tags: string, extraArgs: string = ""): Promise<string> {
     const escaped = this.shellEscape(content)
-    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} ${extraArgs}`
+    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} --metadata owner=opencode ${extraArgs}`
     return this.shell(cmd)
   }
 

@@ -123,6 +123,7 @@ describe("YamsBlackboard", () => {
       // Verify shell command was called with agent data
       const storeCmd = calls.find((c) => c.includes("yams add"))
       expect(storeCmd).toContain("agents/test-agent.json")
+      expect(storeCmd).toContain("--metadata owner=opencode")
     })
 
     test("listAgents returns empty array on no agents", async () => {
@@ -137,10 +138,10 @@ describe("YamsBlackboard", () => {
   })
 
   describe("finding management", () => {
-    test("postFinding generates unique ID", async () => {
-      const { $ } = createMockShell()
+    test("postFinding generates unique ID and writes owner=opencode", async () => {
+      const { $: $1 } = createMockShell()
 
-      const bb = new YamsBlackboard($)
+      const bb = new YamsBlackboard($1)
       const finding = await bb.postFinding({
         agent_id: "test-agent",
         topic: "security",
@@ -154,6 +155,20 @@ describe("YamsBlackboard", () => {
       expect(finding.agent_id).toBe("test-agent")
       expect(finding.topic).toBe("security")
       expect(finding.status).toBe("published")
+
+      // Verify owner metadata is applied on write via captured shell command
+      const { $: $2, calls: calls2 } = createMockShell()
+      const bb2 = new YamsBlackboard($2)
+      await bb2.postFinding({
+        agent_id: "test-agent",
+        topic: "security",
+        title: "Test Finding 2",
+        content: "Body",
+        confidence: 0.5,
+        scope: "session",
+      })
+      const storeCmd2 = calls2.find((c) => c.includes("--metadata owner=opencode"))
+      expect(storeCmd2).toBeTruthy()
     })
 
     test("queryFindings applies filters", async () => {

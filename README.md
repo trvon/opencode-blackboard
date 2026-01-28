@@ -1,6 +1,6 @@
 # YAMS Blackboard Plugin for OpenCode
 
-> **EXPERIMENTAL SOFTWARE** - This plugin is under active development. APIs may change without notice. Use at your own risk.
+> **EXPERIMENTAL SOFTWARE** - This plugin is under active development. APIs may change without notice. Use at your own risk. Requires yams v0.8.1
 
 A **blackboard architecture** plugin enabling agent-to-agent communication through [YAMS](https://github.com/trvon/yams) as shared memory.
 
@@ -186,8 +186,29 @@ See [DESIGN.md](./DESIGN.md) for complete schema documentation.
 
 The plugin integrates with OpenCode's lifecycle:
 
+- **`experimental.session.compacting`**: Injects blackboard summary before the compaction prompt is generated
 - **`session.created`**: Starts a YAMS session for the conversation
 - **`session.compacted`**: Injects blackboard summary into compaction context
+
+## Compaction / Context Recovery
+
+- The plugin automatically pushes a blackboard summary into `output.context` during both `experimental.session.compacting` and `session.compacted`; no extra setup required.
+- To pull recent YAMS memory after compaction, use `yams list` filters (the old `yams hook` command was removed): `yams list --owner opencode --since 24h --limit 20 --format markdown` with optional `--pbi`, `--task`, `--phase`, `--metadata key=value` (repeatable), and `--match-any-metadata`.
+
+Example:
+
+```bash
+yams list --owner opencode --since 24h --limit 20 --format markdown --metadata phase=checkpoint
+```
+
+### Owner / multi-agent convention
+
+- When registering agents or posting findings/tasks with this plugin, set `owner=opencode` so multiple agents share the same YAMS ownership namespace. The plugin writes with `--metadata owner=opencode` by default. Use `yams list --owner opencode ...` to retrieve shared context.
+- Recommended coordinator agent for shared runs:
+
+```bash
+bb_register_agent '{"id":"opencode-coordinator","name":"OpenCode Coordinator","capabilities":["coordination","routing","summary"]}'
+```
 
 ## Persistence
 

@@ -71,6 +71,27 @@ bb_claim_task '{"task_id":"t-abc123","agent_id":"fixer"}'
 | `bb_stats` | Return blackboard statistics (agents, findings, tasks) |
 | `bb_connections` | Explore graph connections for an entity path |
 
+## Compaction / Context Recovery
+
+- This skill auto-injects a blackboard summary into `output.context` during OpenCode compaction hooks (`experimental.session.compacting` and `session.compacted`).
+- For broader YAMS memory after compaction, use `yams list` (replaces the removed `yams hook`): `yams list --owner opencode --since 24h --limit 20 --format markdown` with optional `--pbi`, `--task`, `--phase`, `--metadata key=value` (repeatable), and `--match-any-metadata`.
+
+Example:
+
+```bash
+yams list --owner opencode --since 24h --limit 20 --format markdown --metadata phase=checkpoint
+```
+
+### Owner / multi-agent convention
+
+- When registering agents or writing findings/tasks via this plugin, use the shared owner `opencode` so multiple agents can read the same YAMS records. Retrieval: `yams list --owner opencode ...`.
+
+### Canonical agent registration
+
+```bash
+bb_register_agent '{"id":"opencode-coordinator","name":"OpenCode Coordinator","capabilities":["coordination","routing","summary"]}'
+```
+
 ## Example Workflow
 
 ```typescript
@@ -116,4 +137,3 @@ Run tests with `bun test`.
 
 ---
 For more details see the plugin’s `README.md` and the YAMS skill definition at `docs/skills/yams/SKILL.md`.
-

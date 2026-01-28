@@ -105,6 +105,9 @@ describe("YamsBlackboardPlugin", () => {
       directory: "/test/project",
     })
 
+    expect(plugin["experimental.session.compacting"]).toBeDefined()
+    expect(typeof plugin["experimental.session.compacting"]).toBe("function")
+
     expect(plugin["session.created"]).toBeDefined()
     expect(typeof plugin["session.created"]).toBe("function")
 
@@ -155,6 +158,64 @@ describe("YamsBlackboardPlugin", () => {
       await plugin["session.compacted"]!({} as any, output)
 
       // No console.error calls should have been made
+      expect(errorCalls.length).toBe(0)
+    } finally {
+      console.error = originalError
+    }
+  })
+
+  test("compaction hooks append context safely", async () => {
+    const { $ } = createMockShell()
+
+    const plugin = await YamsBlackboardPlugin({
+      $,
+      project: { path: "/test/project" } as any,
+      directory: "/test/project",
+    })
+
+    const output = { context: [] as string[] }
+    await plugin["experimental.session.compacting"]!({ summary: "s" } as any, output)
+    await plugin["session.compacted"]!({ summary: "s" } as any, output)
+
+    expect(output.context.length).toBeGreaterThanOrEqual(1)
+    // Ensure no console output leaked during hook execution
+    const originalLog = console.log
+    const originalError = console.error
+    const logCalls: any[] = []
+    const errorCalls: any[] = []
+    console.log = (...args: any[]) => logCalls.push(args)
+    console.error = (...args: any[]) => errorCalls.push(args)
+    try {
+      const output2 = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ summary: "s" } as any, output2)
+      await plugin["session.compacted"]!({ summary: "s" } as any, output2)
+      expect(logCalls.length).toBe(0)
+      expect(errorCalls.length).toBe(0)
+    } finally {
+      console.log = originalLog
+      console.error = originalError
+    }
+  })
+
+  test("experimental.session.compacting does not output to console on error", async () => {
+    const failingShell = mock(() => {
+      return createQuietablePromise(Promise.reject(new Error("Mock failure")))
+    })
+
+    const originalError = console.error
+    const errorCalls: any[] = []
+    console.error = (...args: any[]) => errorCalls.push(args)
+
+    try {
+      const plugin = await YamsBlackboardPlugin({
+        $: failingShell as any,
+        project: { path: "/test/project" } as any,
+        directory: "/test/project",
+      })
+
+      const output = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({} as any, output)
+
       expect(errorCalls.length).toBe(0)
     } finally {
       console.error = originalError

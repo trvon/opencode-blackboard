@@ -17,6 +17,12 @@ const SKIP_INTEGRATION = !process.env.YAMS_INTEGRATION && !process.env.YAMS_HOST
 // Helper to check if YAMS daemon is available
 async function isYamsAvailable(): Promise<boolean> {
   try {
+    // Prefer explicit socket if provided
+    const socket = process.env.YAMS_DAEMON_SOCKET || process.env.YAMS_SOCKET
+    if (socket) {
+      const result = await $`yams status --daemon-socket ${socket}`.quiet()
+      return result.exitCode === 0
+    }
     const result = await $`yams status`.quiet()
     return result.exitCode === 0
   } catch {

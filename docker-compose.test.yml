@@ -1,29 +1,104 @@
 services:
   yams:
-    # Use official image in CI (when no .env file), local image for development
     image: ${YAMS_IMAGE:-ghcr.io/trvon/yams:latest}
-    command: ["sh", "-c", "yams init --auto && yams daemon start --foreground"]
+    environment:
+      - BUN_INSTALL=/root/.bun
+      - YAMS_LOG_LEVEL=debug
+    entrypoint: [""]
+    command: >
+      /bin/sh -c '
+        set -euxo pipefail
+        mkdir -p /home/yams/.config/yams /home/yams/.local/share/yams/run
+        rm -f /home/yams/.local/share/yams/.yams-lock /home/yams/.local/share/yams/run/yams.pid
+        # In case the base image autostarted a daemon in a previous run using this volume, stop it
+        yams daemon stop --socket /home/yams/.local/share/yams/run/yams.sock --pid-file /home/yams/.local/share/yams/run/yams.pid || true
+        printf "%s\n" "[version]
+        config_version = 2
+        [core]
+        data_dir = \"/home/yams/.local/share/yams\"
+        enable_telemetry = false
+        log_level = \"warn\"
+        [embeddings]
+        enable = false
+        auto_generate = false
+        auto_on_add = false
+        [daemon]
+        enable = true
+        auto_load_plugins = false
+        log_level = \"warn\"
+        [daemon.models]
+        preload_models = []
+        lazy_loading = true
+        enable_gpu = false
+        " > /home/yams/.config/yams/config.toml
+        yams --version
+        echo "Starting daemon" >&2
+        rc=0
+        env YAMS_ACCEPT_CONFIG_MIGRATION=1 YAMS_LOG=debug yams daemon start \
+          --foreground \
+          --socket /home/yams/.local/share/yams/run/yams.sock \
+          --pid-file /home/yams/.local/share/yams/run/yams.pid \
+          --log-level debug \
+          --log-file /home/yams/.local/share/yams/daemon.log \
+          --config /home/yams/.config/yams/config.toml \
+          --data-dir /home/yams/.local/share/yams || rc=$?
+        echo "daemon exited rc=$rc" >&2
+        exit $rc
+      '
     tty: true
     stdin_open: true
     healthcheck:
-      test: ["CMD-SHELL", "yams status || exit 1"]
+      test: ["CMD-SHELL", "yams daemon status --socket /home/yams/.local/share/yams/run/yams.sock || exit 1"]
       interval: 3s
       timeout: 10s
       retries: 15
       start_period: 5s
-    ports:
-      - "9933:9933"
+    volumes:
+      - yams_data:/home/yams/.local/share/yams
+      - yams_config:/home/yams/.config/yams
 
   tests:
-    image: oven/bun:latest
+    image: ${YAMS_IMAGE:-ghcr.io/trvon/yams:latest}
+    entrypoint: ["/bin/sh", "-c"]
     depends_on:
       yams:
         condition: service_healthy
     environment:
       - YAMS_INTEGRATION=1
-      - YAMS_HOST=yams
-      - YAMS_PORT=9933
+      - YAMS_DAEMON_SOCKET=/home/yams/.local/share/yams/run/yams.sock
+      - YAMS_SOCKET=/home/yams/.local/share/yams/run/yams.sock
+      - YAMS_STORAGE=/home/yams/.local/share/yams
+      - BUN_INSTALL=/root/.bun
     volumes:
       - .:/app
+      - yams_data:/home/yams/.local/share/yams
+      - yams_config:/home/yams/.config/yams
     working_dir: /app
-    command: sh -c "bun install && bun test __tests__/integration.test.ts"
+    command: >
+      set -euo pipefail
+      if ! command -v bun >/dev/null 2>&1; then
+        curl -fsSL https://bun.sh/install | bash
+        export BUN_INSTALL=/root/.bun
+        export PATH=$BUN_INSTALL/bin:$PATH
+      fi
+      export YAMS_DAEMON_SOCKET=/home/yams/.local/share/yams/run/yams.sock
+      export YAMS_SOCKET=/home/yams/.local/share/yams/run/yams.sock
+      # Wait for daemon readiness
+      for i in $(seq 1 60); do
+        if yams daemon status --socket /home/yams/.local/share/yams/run/yams.sock >/dev/null 2>&1; then
+          break
+        fi
+        sleep 2
+      done
+      yams daemon status --socket /home/yams/.local/share/yams/run/yams.sock
+      bun install
+      bun test __tests__/integration.test.ts
+
+volumes:
+  # Ephemeral tmpfs for daemon data to avoid stale locks between runs
+  yams_data:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=512m,uid=999,gid=999,mode=0775"
+  yams_config:

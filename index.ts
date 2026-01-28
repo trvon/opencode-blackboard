@@ -35,6 +35,15 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
   const blackboard = new YamsBlackboard($ as any, { defaultScope: "persistent" })
   let currentContextId: string | undefined
 
+  const pushContextSummary = async (output?: CompactionOutput) => {
+    if (!output || !Array.isArray(output.context)) {
+      return
+    }
+    const contextId = currentContextId || "default"
+    const summary = await blackboard.getContextSummary(contextId)
+    output.context.push(summary)
+  }
+
   return {
     // =========================================================================
     // LIFECYCLE HOOKS
@@ -45,12 +54,18 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
       await blackboard.startSession()
     },
 
+    "experimental.session.compacting": async (input: CompactionInput, output: CompactionOutput) => {
+      try {
+        await pushContextSummary(output)
+      } catch {
+        // Silent failure - console output breaks OpenCode TUI
+      }
+    },
+
     "session.compacted": async (input: CompactionInput, output: CompactionOutput) => {
       // Generate summary of blackboard state for compaction context
       try {
-        const contextId = currentContextId || "default"
-        const summary = await blackboard.getContextSummary(contextId)
-        output.context.push(summary)
+        await pushContextSummary(output)
       } catch {
         // Don't fail compaction if summary generation fails
         // Note: Silent failure - console output breaks OpenCode TUI

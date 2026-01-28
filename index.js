@@ -65,7 +65,7 @@ class YamsBlackboard {
   }
   async yamsStore(content, name, tags, extraArgs = "") {
     const escaped = this.shellEscape(content);
-    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} ${extraArgs}`;
+    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} --metadata owner=opencode ${extraArgs}`;
     return this.shell(cmd);
   }
   async startSession(name) {
@@ -635,15 +635,26 @@ var TaskQuerySchema = z.object({
 var YamsBlackboardPlugin = async ({ $, project, directory }) => {
   const blackboard = new YamsBlackboard($, { defaultScope: "persistent" });
   let currentContextId;
+  const pushContextSummary = async (output) => {
+    if (!output || !Array.isArray(output.context)) {
+      return;
+    }
+    const contextId = currentContextId || "default";
+    const summary = await blackboard.getContextSummary(contextId);
+    output.context.push(summary);
+  };
   return {
     "session.created": async () => {
       await blackboard.startSession();
     },
+    "experimental.session.compacting": async (input, output) => {
+      try {
+        await pushContextSummary(output);
+      } catch {}
+    },
     "session.compacted": async (input, output) => {
       try {
-        const contextId = currentContextId || "default";
-        const summary = await blackboard.getContextSummary(contextId);
-        output.context.push(summary);
+        await pushContextSummary(output);
       } catch {}
     },
     tool: {
@@ -1070,8 +1081,8 @@ ${JSON.stringify(graph.nodes, null, 2)}`;
     }
   };
 };
-var open_code_blackboard_default = YamsBlackboardPlugin;
+var opencode_blackboard_default = YamsBlackboardPlugin;
 export {
-  open_code_blackboard_default as default,
+  opencode_blackboard_default as default,
   YamsBlackboardPlugin
 };
