@@ -20,14 +20,6 @@ import {
   ReferenceSchema,
 } from "./types"
 
-// Compaction hook types
-interface CompactionInput {
-  summary: string
-}
-interface CompactionOutput {
-  context: string[]
-}
-
 // Named export for explicit imports
 export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) => {
   // Initialize blackboard (session will be started on session.created hook)
@@ -35,7 +27,7 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
   const blackboard = new YamsBlackboard($ as any, { defaultScope: "persistent" })
   let currentContextId: string | undefined
 
-  const pushContextSummary = async (output?: CompactionOutput) => {
+  const pushContextSummary = async (output?: { context: string[] }) => {
     if (!output || !Array.isArray(output.context)) {
       return
     }
@@ -54,7 +46,7 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
       await blackboard.startSession()
     },
 
-    "experimental.session.compacting": async (input: CompactionInput, output: CompactionOutput) => {
+    "experimental.session.compacting": async (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => {
       try {
         await pushContextSummary(output)
       } catch {
@@ -62,7 +54,7 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
       }
     },
 
-    "session.compacted": async (input: CompactionInput, output: CompactionOutput) => {
+    "session.compacted": async (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => {
       // Generate summary of blackboard state for compaction context
       try {
         await pushContextSummary(output)
