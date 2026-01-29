@@ -160,7 +160,7 @@ See [DESIGN.md](./DESIGN.md) for complete schema documentation.
 Blackboard state is automatically pushed into `output.context` during compaction. To manually retrieve shared context:
 
 ```bash
-yams list --owner opencode --since 24h --limit 20 --format markdown
+yams list --owner opencode --since 24h --limit 20 --format json --match-all-tags
 ```
 
 ## Persistence

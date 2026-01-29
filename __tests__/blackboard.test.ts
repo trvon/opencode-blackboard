@@ -63,7 +63,7 @@ describe("YamsBlackboard", () => {
 
     test("handles Buffer stdout", async () => {
       const { $ } = createMockShell({
-        "session_start": () => ({ stdout: Buffer.from("session started") }),
+        "session start": () => ({ stdout: Buffer.from("session started") }),
       })
 
       const bb = new YamsBlackboard($)
@@ -74,7 +74,7 @@ describe("YamsBlackboard", () => {
     test("handles Uint8Array stdout", async () => {
       const encoder = new TextEncoder()
       const { $ } = createMockShell({
-        "session_start": () => ({ stdout: encoder.encode("session started") }),
+        "session start": () => ({ stdout: encoder.encode("session started") }),
       })
 
       const bb = new YamsBlackboard($)
@@ -84,7 +84,7 @@ describe("YamsBlackboard", () => {
 
     test("handles object with text property", async () => {
       const { $ } = createMockShell({
-        "session_start": () => ({ text: "text property output" }),
+        "session start": () => ({ text: "text property output" }),
       })
 
       const bb = new YamsBlackboard($)
@@ -299,7 +299,7 @@ Found SQL injection vulnerability`
       expect(finding!.content).toBe("Found SQL injection vulnerability")
     })
 
-    test("acknowledgeFinding sends update with status tag and metadata", async () => {
+    test("acknowledgeFinding sends update with status tag and metadata key=value args", async () => {
       const { $, calls } = createMockShell()
 
       const bb = new YamsBlackboard($)
@@ -307,12 +307,12 @@ Found SQL injection vulnerability`
 
       const updateCmd = calls.find(c => c.includes("update"))
       expect(updateCmd).toContain("status:acknowledged")
-      expect(updateCmd).toContain("acknowledged_by")
-      expect(updateCmd).toContain("reviewer-agent")
-      expect(updateCmd).toContain("acknowledged_at")
+      expect(updateCmd).toContain("-m")
+      expect(updateCmd).toContain("acknowledged_by=reviewer-agent")
+      expect(updateCmd).toContain("acknowledged_at=")
     })
 
-    test("resolveFinding includes resolver, resolution, and timestamp", async () => {
+    test("resolveFinding includes resolver, resolution, and timestamp as key=value args", async () => {
       const { $, calls } = createMockShell()
 
       const bb = new YamsBlackboard($)
@@ -320,9 +320,10 @@ Found SQL injection vulnerability`
 
       const updateCmd = calls.find(c => c.includes("update"))
       expect(updateCmd).toContain("status:resolved")
-      expect(updateCmd).toContain("fixer-agent")
-      expect(updateCmd).toContain("Patched the query")
-      expect(updateCmd).toContain("resolved_at")
+      expect(updateCmd).toContain("-m")
+      expect(updateCmd).toContain("resolved_by=fixer-agent")
+      expect(updateCmd).toContain("resolution=Patched the query")
+      expect(updateCmd).toContain("resolved_at=")
     })
 
     test("searchFindings constructs search command with tag filters", async () => {
@@ -336,6 +337,7 @@ Found SQL injection vulnerability`
       const searchCmd = calls.find(c => c.includes("search"))
       expect(searchCmd).toContain("SQL injection")
       expect(searchCmd).toContain("finding,topic:security")
+      expect(searchCmd).toContain("--match-all-tags")
       expect(searchCmd).toContain("--limit 5")
     })
   })

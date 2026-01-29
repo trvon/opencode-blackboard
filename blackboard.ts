@@ -136,14 +136,15 @@ export class YamsBlackboard {
 
   async startSession(name?: string): Promise<string> {
     this.sessionName = name || `opencode-${Date.now()}`
-    await this.yams(`session_start --name ${this.shellEscape(this.sessionName)}`)
+    await this.yams(`session start ${this.shellEscape(this.sessionName)}`)
+    await this.yams(`session use ${this.shellEscape(this.sessionName)}`)
     this.sessionActive = true
     return this.sessionName
   }
 
   async stopSession(): Promise<void> {
     if (this.sessionName && this.sessionActive) {
-      await this.yams(`session_stop --name ${this.shellEscape(this.sessionName)}`)
+      await this.yams(`session close`)
       this.sessionActive = false
     }
   }
@@ -176,8 +177,8 @@ export class YamsBlackboard {
 
   async getAgent(agentId: string): Promise<AgentCard | null> {
     try {
-      const result = await this.yamsJson<{ content: string }>(`cat --name ${this.shellEscape(`agents/${agentId}.json`)}`)
-      return JSON.parse(result.content)
+      const result = await this.yams(`cat ${this.shellEscape(`agents/${agentId}.json`)}`)
+      return JSON.parse(result)
     } catch {
       return null
     }
@@ -185,11 +186,11 @@ export class YamsBlackboard {
 
   async listAgents(): Promise<AgentCard[]> {
     try {
-      const result = await this.yamsJson<{ documents: any[] }>(`list --tags "agent" --limit 100`)
+      const result = await this.yamsJson<{ documents: any[] }>(`list --tags "agent" --match-all-tags --limit 100`)
       const agents: AgentCard[] = []
       for (const doc of result.documents || []) {
         try {
-          const content = await this.yams(`cat --name ${this.shellEscape(doc.name)}`)
+          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
           agents.push(JSON.parse(content))
         } catch { /* skip malformed */ }
       }
@@ -278,7 +279,7 @@ ${finding.content}
   async getFinding(findingId: string): Promise<Finding | null> {
     try {
       // Search by ID in the findings directory
-      const result = await this.yams(`cat --name ${this.shellEscape(`findings/**/${findingId}.md`)}`)
+      const result = await this.yams(`cat ${this.shellEscape(`findings/**/${findingId}.md`)}`)
       // Parse frontmatter
       const match = result.match(/^---\n([\s\S]*?)\n---\n\n# (.*?)\n\n([\s\S]*)$/)
       if (!match) return null
@@ -319,7 +320,7 @@ ${finding.content}
 
     try {
       const result = await this.yamsJson<{ documents: any[] }>(
-        `list --tags ${this.shellEscape(tags.join(","))} --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
+        `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
       )
 
       const findings: Finding[] = []
@@ -345,7 +346,7 @@ ${finding.content}
 
     try {
       const result = await this.yamsJson<{ results: any[] }>(
-        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --limit ${limit} ${this.sessionArg()}`
+        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`
       )
 
       const findings: Finding[] = []
@@ -362,13 +363,19 @@ ${finding.content}
     }
   }
 
+  private buildMetadataArgs(meta: Record<string, string>): string {
+    return Object.entries(meta)
+      .map(([k, v]) => `-m ${this.shellEscape(`${k}=${v}`)}`)
+      .join(" ")
+  }
+
   async acknowledgeFinding(findingId: string, agentId: string): Promise<void> {
-    const metadata = JSON.stringify({
+    const metaArgs = this.buildMetadataArgs({
       acknowledged_by: agentId,
       acknowledged_at: this.nowISO(),
     })
     await this.yams(
-      `update --name ${this.shellEscape(`findings/**/${findingId}.md`)} --tags ${this.shellEscape("status:acknowledged")} --metadata ${this.shellEscape(metadata)}`
+      `update --name ${this.shellEscape(`findings/**/${findingId}.md`)} --tags ${this.shellEscape("status:acknowledged")} ${metaArgs}`
     )
   }
 
@@ -377,13 +384,13 @@ ${finding.content}
     resolvedBy: string,
     resolution: string
   ): Promise<void> {
-    const metadata = JSON.stringify({
+    const metaArgs = this.buildMetadataArgs({
       resolved_by: resolvedBy,
       resolution,
       resolved_at: this.nowISO(),
     })
     await this.yams(
-      `update --name ${this.shellEscape(`findings/**/${findingId}.md`)} --tags ${this.shellEscape("status:resolved")} --metadata ${this.shellEscape(metadata)}`
+      `update --name ${this.shellEscape(`findings/**/${findingId}.md`)} --tags ${this.shellEscape("status:resolved")} ${metaArgs}`
     )
   }
 
@@ -423,7 +430,7 @@ ${finding.content}
 
   async getTask(taskId: string): Promise<Task | null> {
     try {
-      const result = await this.yams(`cat --name ${this.shellEscape(`tasks/${taskId}.json`)}`)
+      const result = await this.yams(`cat ${this.shellEscape(`tasks/${taskId}.json`)}`)
       return JSON.parse(result)
     } catch {
       return null
@@ -441,7 +448,7 @@ ${finding.content}
 
     try {
       const result = await this.yamsJson<{ documents: any[] }>(
-        `list --tags ${this.shellEscape(tags.join(","))} --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
+        `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
       )
 
       const tasks: Task[] = []
@@ -557,7 +564,7 @@ ${finding.content}
 
   async getContext(contextId: string): Promise<Context | null> {
     try {
-      const result = await this.yams(`cat --name ${this.shellEscape(`contexts/${contextId}.json`)}`)
+      const result = await this.yams(`cat ${this.shellEscape(`contexts/${contextId}.json`)}`)
       return JSON.parse(result)
     } catch {
       return null
@@ -628,7 +635,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
 
     let contextCount = 0
     try {
-      const ctxResult = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape("context")} --limit 1000`)
+      const ctxResult = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape("context")} --match-all-tags --limit 1000`)
       contextCount = ctxResult.documents?.length || 0
     } catch { /* contexts unavailable */ }
 
