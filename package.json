@@ -1,6 +1,6 @@
 {
   "name": "yams-blackboard",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "YAMS Blackboard plugin for OpenCode - agent-to-agent communication via shared memory",
   "main": "index.js",
   "types": "index.d.ts",

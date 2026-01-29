@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/trvon/opencode-blackboard/compare/v1.1.2...v1.1.3) (2026-01-29)
+
+
+### Bug Fixes
+
+* aligning yams commands with updates ([5142b69](https://github.com/trvon/opencode-blackboard/commit/5142b69eb63c2451edcfd10328c33859103d9ba5))
+
 ## [1.1.2](https://github.com/trvon/opencode-blackboard/compare/v1.1.1...v1.1.2) (2026-01-29)
 
 
