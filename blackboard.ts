@@ -60,22 +60,12 @@ export class YamsBlackboard {
   }
 
   private sessionArg(): string {
-    return this.sessionName ? `--session ${this.sessionName}` : ""
+    return this.sessionName ? `--session ${this.shellEscape(this.sessionName)}` : ""
   }
 
   // Shell escape a string for safe inclusion in shell commands
   private shellEscape(s: string): string {
     return `'${s.replace(/'/g, "'\\''")}'`
-  }
-
-  // Helper to check if value is Buffer-like (has toString method)
-  private isBufferLike(value: unknown): value is { toString(encoding?: string): string } {
-    return (
-      value !== null &&
-      typeof value === 'object' &&
-      typeof (value as any).toString === 'function' &&
-      (value as any).constructor?.name === 'Buffer'
-    )
   }
 
   // Execute a shell command string
@@ -146,14 +136,14 @@ export class YamsBlackboard {
 
   async startSession(name?: string): Promise<string> {
     this.sessionName = name || `opencode-${Date.now()}`
-    await this.yams(`session_start --name "${this.sessionName}"`)
+    await this.yams(`session_start --name ${this.shellEscape(this.sessionName)}`)
     this.sessionActive = true
     return this.sessionName
   }
 
   async stopSession(): Promise<void> {
     if (this.sessionName && this.sessionActive) {
-      await this.yams(`session_stop --name "${this.sessionName}"`)
+      await this.yams(`session_stop --name ${this.shellEscape(this.sessionName)}`)
       this.sessionActive = false
     }
   }
@@ -186,7 +176,7 @@ export class YamsBlackboard {
 
   async getAgent(agentId: string): Promise<AgentCard | null> {
     try {
-      const result = await this.yamsJson<{ content: string }>(`cat --name "agents/${agentId}.json"`)
+      const result = await this.yamsJson<{ content: string }>(`cat --name ${this.shellEscape(`agents/${agentId}.json`)}`)
       return JSON.parse(result.content)
     } catch {
       return null
@@ -199,7 +189,7 @@ export class YamsBlackboard {
       const agents: AgentCard[] = []
       for (const doc of result.documents || []) {
         try {
-          const content = await this.yams(`cat --name "${doc.name}"`)
+          const content = await this.yams(`cat --name ${this.shellEscape(doc.name)}`)
           agents.push(JSON.parse(content))
         } catch { /* skip malformed */ }
       }
@@ -288,7 +278,7 @@ ${finding.content}
   async getFinding(findingId: string): Promise<Finding | null> {
     try {
       // Search by ID in the findings directory
-      const result = await this.yams(`cat --name "findings/**/${findingId}.md"`)
+      const result = await this.yams(`cat --name ${this.shellEscape(`findings/**/${findingId}.md`)}`)
       // Parse frontmatter
       const match = result.match(/^---\n([\s\S]*?)\n---\n\n# (.*?)\n\n([\s\S]*)$/)
       if (!match) return null
@@ -329,12 +319,14 @@ ${finding.content}
 
     try {
       const result = await this.yamsJson<{ documents: any[] }>(
-        `list --tags "${tags.join(",")}" --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
+        `list --tags ${this.shellEscape(tags.join(","))} --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
       )
 
       const findings: Finding[] = []
       for (const doc of result.documents || []) {
-        const finding = await this.getFinding(doc.name?.split("/").pop()?.replace(".md", "") || "")
+        const id = doc.name?.split("/").pop()?.replace(".md", "")
+        if (!id) continue
+        const finding = await this.getFinding(id)
         if (finding) {
           // Apply confidence filter
           if (query.min_confidence && finding.confidence < query.min_confidence) continue
@@ -353,7 +345,7 @@ ${finding.content}
 
     try {
       const result = await this.yamsJson<{ results: any[] }>(
-        `search "${query}" --tags "${tags}" --limit ${limit} ${this.sessionArg()}`
+        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --limit ${limit} ${this.sessionArg()}`
       )
 
       const findings: Finding[] = []
@@ -371,8 +363,12 @@ ${finding.content}
   }
 
   async acknowledgeFinding(findingId: string, agentId: string): Promise<void> {
+    const metadata = JSON.stringify({
+      acknowledged_by: agentId,
+      acknowledged_at: this.nowISO(),
+    })
     await this.yams(
-      `update --name "findings/**/${findingId}.md" --tags "status:acknowledged" --metadata '{"acknowledged_by":"${agentId}","acknowledged_at":"${this.nowISO()}"}'`
+      `update --name ${this.shellEscape(`findings/**/${findingId}.md`)} --tags ${this.shellEscape("status:acknowledged")} --metadata ${this.shellEscape(metadata)}`
     )
   }
 
@@ -381,8 +377,13 @@ ${finding.content}
     resolvedBy: string,
     resolution: string
   ): Promise<void> {
+    const metadata = JSON.stringify({
+      resolved_by: resolvedBy,
+      resolution,
+      resolved_at: this.nowISO(),
+    })
     await this.yams(
-      `update --name "findings/**/${findingId}.md" --tags "status:resolved" --metadata '{"resolved_by":"${resolvedBy}","resolution":"${resolution}","resolved_at":"${this.nowISO()}"}'`
+      `update --name ${this.shellEscape(`findings/**/${findingId}.md`)} --tags ${this.shellEscape("status:resolved")} --metadata ${this.shellEscape(metadata)}`
     )
   }
 
@@ -422,7 +423,7 @@ ${finding.content}
 
   async getTask(taskId: string): Promise<Task | null> {
     try {
-      const result = await this.yams(`cat --name "tasks/${taskId}.json"`)
+      const result = await this.yams(`cat --name ${this.shellEscape(`tasks/${taskId}.json`)}`)
       return JSON.parse(result)
     } catch {
       return null
@@ -440,12 +441,14 @@ ${finding.content}
 
     try {
       const result = await this.yamsJson<{ documents: any[] }>(
-        `list --tags "${tags.join(",")}" --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
+        `list --tags ${this.shellEscape(tags.join(","))} --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
       )
 
       const tasks: Task[] = []
       for (const doc of result.documents || []) {
-        const task = await this.getTask(doc.name?.replace("tasks/", "").replace(".json", "") || "")
+        const id = doc.name?.replace("tasks/", "").replace(".json", "")
+        if (!id) continue
+        const task = await this.getTask(id)
         if (task) tasks.push(task)
       }
       return tasks
@@ -468,7 +471,13 @@ ${finding.content}
       ready.push(task)
     }
 
-    // TODO: Filter by agent capabilities if provided
+    // Filter by agent capabilities if provided
+    if (agentCapabilities?.length) {
+      const capSet = new Set(agentCapabilities)
+      return ready
+        .filter(t => capSet.has(t.type))
+        .sort((a, b) => (a.priority ?? 2) - (b.priority ?? 2))
+    }
 
     return ready.sort((a, b) => (a.priority ?? 2) - (b.priority ?? 2))
   }
@@ -548,7 +557,7 @@ ${finding.content}
 
   async getContext(contextId: string): Promise<Context | null> {
     try {
-      const result = await this.yams(`cat --name "contexts/${contextId}.json"`)
+      const result = await this.yams(`cat --name ${this.shellEscape(`contexts/${contextId}.json`)}`)
       return JSON.parse(result)
     } catch {
       return null
@@ -597,7 +606,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
   ): Promise<{ nodes: any[]; edges: any[] }> {
     try {
       const result = await this.yamsJson<any>(
-        `graph --name "${entityPath}" --depth ${depth}`
+        `graph --name ${this.shellEscape(entityPath)} --depth ${depth}`
       )
       return {
         nodes: result.connected_nodes || [],
@@ -616,6 +625,12 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
     const agents = await this.listAgents()
     const findings = await this.queryFindings({ limit: 1000, offset: 0 })
     const tasks = await this.queryTasks({ limit: 1000, offset: 0 })
+
+    let contextCount = 0
+    try {
+      const ctxResult = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape("context")} --limit 1000`)
+      contextCount = ctxResult.documents?.length || 0
+    } catch { /* contexts unavailable */ }
 
     const findingsByTopic: Record<string, number> = {}
     const findingsByStatus: Record<string, number> = {}
@@ -648,7 +663,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
         by_status: tasksByStatus,
         by_type: tasksByType,
       },
-      contexts: 0, // TODO: count contexts
+      contexts: contextCount,
     }
   }
 }

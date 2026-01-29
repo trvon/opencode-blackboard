@@ -138,6 +138,76 @@ describe.skipIf(SKIP_INTEGRATION)("Integration Tests", () => {
       await bb.stopSession()
     })
 
+    test("multi-agent shared blackboard coordination", async () => {
+      const bb = new YamsBlackboard(shell as any)
+      await bb.startSession(`multi-agent-${Date.now()}`)
+
+      // Agent A and Agent B register
+      const agentA = await bb.registerAgent({
+        id: `agent-a-${Date.now()}`, name: "Agent A",
+        capabilities: ["security-audit"], status: "active",
+      })
+      const agentB = await bb.registerAgent({
+        id: `agent-b-${Date.now()}`, name: "Agent B",
+        capabilities: ["code-review"], status: "active",
+      })
+
+      // Agent A posts a security finding
+      const finding = await bb.postFinding({
+        agent_id: agentA.id, topic: "security",
+        title: "SQL Injection in login handler",
+        content: "Unsanitized user input in SQL query",
+        confidence: 0.95, severity: "high", scope: "persistent",
+      })
+
+      // Agent B discovers it by querying topic
+      const discovered = await bb.queryFindings({ topic: "security", limit: 50, offset: 0 })
+      expect(discovered.some(f => f.id === finding.id)).toBe(true)
+
+      // Agent A creates a task
+      const task = await bb.createTask({
+        title: "Fix SQL injection", type: "fix",
+        priority: 0, created_by: agentA.id,
+      })
+
+      // Agent B claims and completes the task
+      const claimed = await bb.claimTask(task.id, agentB.id)
+      expect(claimed?.assigned_to).toBe(agentB.id)
+
+      const completed = await bb.completeTask(task.id, { findings: [finding.id] })
+      expect(completed?.status).toBe("completed")
+
+      await bb.stopSession()
+    })
+
+    test("context workflow: create, post with context_id, query by context", async () => {
+      const bb = new YamsBlackboard(shell as any)
+      await bb.startSession(`context-wf-${Date.now()}`)
+
+      const ctx = await bb.createContext("audit-ctx", "Security Audit", "Full audit")
+      expect(ctx.status).toBe("active")
+
+      // Post findings with context_id
+      await bb.postFinding({
+        agent_id: "auditor", topic: "security",
+        title: "Weak password policy",
+        content: "No minimum length enforced",
+        confidence: 0.85, scope: "persistent",
+        context_id: "audit-ctx",
+      })
+
+      // Query by context
+      const findings = await bb.queryFindings({ context_id: "audit-ctx", limit: 50, offset: 0 })
+      expect(findings.length).toBeGreaterThanOrEqual(1)
+
+      // Get summary
+      const summary = await bb.getContextSummary("audit-ctx")
+      expect(summary).toContain("Blackboard Summary")
+      expect(summary).toContain("audit-ctx")
+
+      await bb.stopSession()
+    })
+
     test("can get blackboard statistics", async () => {
       const bb = new YamsBlackboard(shell as any)
 

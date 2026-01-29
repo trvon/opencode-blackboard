@@ -96,6 +96,129 @@ describe("YamsBlackboardPlugin", () => {
     }
   })
 
+  describe("tool execute functions", () => {
+    test("bb_register_agent.execute returns formatted agent info", async () => {
+      const { $ } = createMockShell()
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const result = await plugin.tool.bb_register_agent.execute({
+        id: "scanner-1", name: "Scanner", capabilities: ["security-audit"],
+      })
+
+      expect(result).toContain("scanner-1")
+      expect(result).toContain("security-audit")
+      expect(result).toContain("Registered at:")
+    })
+
+    test("bb_post_finding.execute returns finding ID and topic", async () => {
+      const { $ } = createMockShell()
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const result = await plugin.tool.bb_post_finding.execute({
+        agent_id: "scanner", topic: "security", title: "XSS Found",
+        content: "Reflected XSS in /search", confidence: 0.9,
+      })
+
+      expect(result).toContain("Finding posted:")
+      expect(result).toContain("f-")
+      expect(result).toContain("security")
+    })
+
+    test("bb_list_agents.execute returns empty message when no agents", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const result = await plugin.tool.bb_list_agents.execute({})
+      expect(result).toBe("No agents registered yet.")
+    })
+
+    test("bb_claim_task.execute returns failure when task already claimed", async () => {
+      const claimedTask = { id: "t-1", title: "Task", type: "review", status: "claimed", priority: 2, created_by: "a", assigned_to: "other" }
+      const { $ } = createMockShell({
+        cat: () => ({ stdout: Buffer.from(JSON.stringify(claimedTask)) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const result = await plugin.tool.bb_claim_task.execute({ task_id: "t-1", agent_id: "me" })
+      expect(result).toContain("Failed to claim")
+    })
+
+    test("bb_create_context.execute with set_current updates context for subsequent queries", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      await plugin.tool.bb_create_context.execute({
+        id: "ctx-1", name: "My Context", set_current: true,
+      })
+
+      // bb_get_context_summary should now use ctx-1 as default
+      const summary = await plugin.tool.bb_get_context_summary.execute({})
+      expect(summary).toContain("ctx-1")
+    })
+
+    test("bb_set_context.execute updates internal context", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      await plugin.tool.bb_set_context.execute({ context_id: "new-ctx" })
+      const summary = await plugin.tool.bb_get_context_summary.execute({})
+      expect(summary).toContain("new-ctx")
+    })
+  })
+
+  describe("compaction content validation", () => {
+    test("experimental.session.compacting pushes Blackboard Summary string", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const output = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ summary: "s" } as any, output)
+
+      expect(output.context.length).toBeGreaterThanOrEqual(1)
+      expect(output.context.some(s => s.includes("Blackboard Summary"))).toBe(true)
+    })
+
+    test("session.compacted pushes summary with agent/finding/task sections", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const output = { context: [] as string[] }
+      await plugin["session.compacted"]!({ summary: "s" } as any, output)
+
+      expect(output.context.length).toBeGreaterThanOrEqual(1)
+      const content = output.context.join("\n")
+      expect(content).toContain("Agents Active")
+      expect(content).toContain("Key Findings")
+      expect(content).toContain("Tasks")
+    })
+  })
+
   test("provides lifecycle hooks", async () => {
     const { $ } = createMockShell()
 

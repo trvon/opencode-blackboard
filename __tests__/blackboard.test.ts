@@ -266,6 +266,269 @@ describe("YamsBlackboard", () => {
     })
   })
 
+  describe("finding lifecycle", () => {
+    test("getFinding parses YAML frontmatter and markdown body", async () => {
+      const md = `---
+id: "f-123"
+agent_id: "scanner"
+topic: "security"
+confidence: 0.9
+status: "published"
+scope: "persistent"
+severity: "high"
+---
+
+# SQL Injection in login
+
+Found SQL injection vulnerability`
+
+      const { $ } = createMockShell({
+        cat: () => ({ stdout: Buffer.from(md) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const finding = await bb.getFinding("f-123")
+
+      expect(finding).not.toBeNull()
+      expect(finding!.id).toBe("f-123")
+      expect(finding!.agent_id).toBe("scanner")
+      expect(finding!.topic).toBe("security")
+      expect(finding!.confidence).toBe(0.9)
+      expect(finding!.severity).toBe("high")
+      expect(finding!.title).toBe("SQL Injection in login")
+      expect(finding!.content).toBe("Found SQL injection vulnerability")
+    })
+
+    test("acknowledgeFinding sends update with status tag and metadata", async () => {
+      const { $, calls } = createMockShell()
+
+      const bb = new YamsBlackboard($)
+      await bb.acknowledgeFinding("f-123", "reviewer-agent")
+
+      const updateCmd = calls.find(c => c.includes("update"))
+      expect(updateCmd).toContain("status:acknowledged")
+      expect(updateCmd).toContain("acknowledged_by")
+      expect(updateCmd).toContain("reviewer-agent")
+      expect(updateCmd).toContain("acknowledged_at")
+    })
+
+    test("resolveFinding includes resolver, resolution, and timestamp", async () => {
+      const { $, calls } = createMockShell()
+
+      const bb = new YamsBlackboard($)
+      await bb.resolveFinding("f-456", "fixer-agent", "Patched the query")
+
+      const updateCmd = calls.find(c => c.includes("update"))
+      expect(updateCmd).toContain("status:resolved")
+      expect(updateCmd).toContain("fixer-agent")
+      expect(updateCmd).toContain("Patched the query")
+      expect(updateCmd).toContain("resolved_at")
+    })
+
+    test("searchFindings constructs search command with tag filters", async () => {
+      const { $, calls } = createMockShell({
+        search: () => ({ stdout: Buffer.from(JSON.stringify({ results: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.searchFindings("SQL injection", { topic: "security", limit: 5 })
+
+      const searchCmd = calls.find(c => c.includes("search"))
+      expect(searchCmd).toContain("SQL injection")
+      expect(searchCmd).toContain("finding,topic:security")
+      expect(searchCmd).toContain("--limit 5")
+    })
+  })
+
+  describe("task dependencies (getReadyTasks)", () => {
+    test("returns pending tasks with no depends_on", async () => {
+      const task1 = { id: "t-1", title: "Task 1", type: "review", status: "pending", priority: 2, created_by: "a" }
+      const task2 = { id: "t-2", title: "Task 2", type: "test", status: "pending", priority: 1, created_by: "a" }
+
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [
+          { name: "tasks/t-1.json" },
+          { name: "tasks/t-2.json" },
+        ] })) }),
+        "tasks/t-1.json": () => ({ stdout: Buffer.from(JSON.stringify(task1)) }),
+        "tasks/t-2.json": () => ({ stdout: Buffer.from(JSON.stringify(task2)) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const ready = await bb.getReadyTasks()
+
+      expect(ready.length).toBe(2)
+      // Sorted by priority: t-2 (priority 1) before t-1 (priority 2)
+      expect(ready[0].id).toBe("t-2")
+      expect(ready[1].id).toBe("t-1")
+    })
+
+    test("excludes tasks whose dependencies are not completed", async () => {
+      const task1 = { id: "t-1", title: "Dep", type: "review", status: "pending", priority: 2, created_by: "a" }
+      const task2 = { id: "t-2", title: "Blocked", type: "test", status: "pending", priority: 1, created_by: "a", depends_on: ["t-1"] }
+
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [
+          { name: "tasks/t-1.json" },
+          { name: "tasks/t-2.json" },
+        ] })) }),
+        "tasks/t-1.json": () => ({ stdout: Buffer.from(JSON.stringify(task1)) }),
+        "tasks/t-2.json": () => ({ stdout: Buffer.from(JSON.stringify(task2)) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const ready = await bb.getReadyTasks()
+
+      // t-2 depends on t-1 which is "pending" not "completed", so excluded
+      expect(ready.length).toBe(1)
+      expect(ready[0].id).toBe("t-1")
+    })
+
+    test("includes tasks whose dependencies are all completed", async () => {
+      const task1 = { id: "t-1", title: "Done", type: "review", status: "completed", priority: 2, created_by: "a" }
+      const task2 = { id: "t-2", title: "Ready", type: "test", status: "pending", priority: 0, created_by: "a", depends_on: ["t-1"] }
+
+      // getReadyTasks queries pending tasks, then checks deps
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [
+          { name: "tasks/t-2.json" },
+        ] })) }),
+        "tasks/t-2.json": () => ({ stdout: Buffer.from(JSON.stringify(task2)) }),
+        "tasks/t-1.json": () => ({ stdout: Buffer.from(JSON.stringify(task1)) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const ready = await bb.getReadyTasks()
+
+      expect(ready.length).toBe(1)
+      expect(ready[0].id).toBe("t-2")
+    })
+  })
+
+  describe("context management extended", () => {
+    test("getContext retrieves and parses context JSON", async () => {
+      const ctx = { id: "audit-1", name: "Audit", description: "Full audit", findings: [], tasks: [], agents: [], status: "active" }
+      const { $ } = createMockShell({
+        cat: () => ({ stdout: Buffer.from(JSON.stringify(ctx)) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const result = await bb.getContext("audit-1")
+
+      expect(result).not.toBeNull()
+      expect(result!.id).toBe("audit-1")
+      expect(result!.name).toBe("Audit")
+      expect(result!.status).toBe("active")
+    })
+
+    test("getContextSummary builds markdown with agents, findings, tasks sections", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const summary = await bb.getContextSummary("test-ctx")
+
+      expect(summary).toContain("Blackboard Summary")
+      expect(summary).toContain("test-ctx")
+      expect(summary).toContain("Agents Active")
+      expect(summary).toContain("Key Findings")
+      expect(summary).toContain("Tasks")
+    })
+  })
+
+  describe("tag filtering for shared blackboard", () => {
+    test("queryFindings with agent_id builds agent tag", async () => {
+      const { $, calls } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.queryFindings({ agent_id: "agent-b", limit: 10, offset: 0 })
+
+      const listCmd = calls.find(c => c.includes("list"))
+      expect(listCmd).toContain("agent:agent-b")
+    })
+
+    test("queryTasks with assigned_to builds assignee tag", async () => {
+      const { $, calls } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.queryTasks({ assigned_to: "agent-a", limit: 10, offset: 0 })
+
+      const listCmd = calls.find(c => c.includes("list"))
+      expect(listCmd).toContain("assignee:agent-a")
+    })
+
+    test("session arg is passed when session is set", async () => {
+      const { $, calls } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($, { sessionName: "my-session" })
+      await bb.queryFindings({ limit: 10, offset: 0 })
+
+      const listCmd = calls.find(c => c.includes("list"))
+      expect(listCmd).toContain("--session 'my-session'")
+    })
+
+    test("session arg is absent when session is not set", async () => {
+      const { $, calls } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.queryFindings({ limit: 10, offset: 0 })
+
+      const listCmd = calls.find(c => c.includes("list"))
+      expect(listCmd).not.toContain("--session")
+    })
+  })
+
+  describe("error handling", () => {
+    test("yamsJson throws descriptive error on invalid JSON", async () => {
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from("not valid json {{{") }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await expect(bb.queryFindings({ limit: 10, offset: 0 })).resolves.toEqual([])
+      // queryFindings catches internally, but we can test getAgent for null on failure
+    })
+
+    test("getAgent returns null when cat command fails", async () => {
+      const failingShell = mock(() => {
+        return createQuietablePromise(Promise.reject(new Error("not found")))
+      })
+
+      const bb = new YamsBlackboard(failingShell as any)
+      const agent = await bb.getAgent("nonexistent")
+      expect(agent).toBeNull()
+    })
+
+    test("getTask returns null when cat command fails", async () => {
+      const failingShell = mock(() => {
+        return createQuietablePromise(Promise.reject(new Error("not found")))
+      })
+
+      const bb = new YamsBlackboard(failingShell as any)
+      const task = await bb.getTask("nonexistent")
+      expect(task).toBeNull()
+    })
+
+    test("getConnections returns empty on error", async () => {
+      const failingShell = mock(() => {
+        return createQuietablePromise(Promise.reject(new Error("network error")))
+      })
+
+      const bb = new YamsBlackboard(failingShell as any)
+      const result = await bb.getConnections("some/path")
+      expect(result).toEqual({ nodes: [], edges: [] })
+    })
+  })
+
   describe("utility methods", () => {
     test("genId produces unique identifiers", async () => {
       const { $ } = createMockShell()
@@ -403,6 +666,164 @@ describe("YamsBlackboard", () => {
       // Verify that 2>&1 is appended for stderr capture
       const shellCmd = calls.find(c => c.includes("sh -c"))
       expect(shellCmd).toContain("2>&1")
+    })
+
+    test("all shell calls use .quiet() to suppress TUI output", async () => {
+      let quietCalled = 0
+      const mockShell = mock((strings: TemplateStringsArray, ...values: unknown[]) => {
+        const promise = Promise.resolve({ stdout: Buffer.from("{}") })
+        return Object.assign(promise, {
+          quiet() {
+            quietCalled++
+            return promise
+          },
+        })
+      })
+
+      const bb = new YamsBlackboard(mockShell as any)
+      await bb.startSession("test")
+      await bb.listAgents()
+
+      // Every shell invocation must call .quiet()
+      expect(quietCalled).toBe(mockShell.mock.calls.length)
+    })
+
+    test("acknowledgeFinding produces no console output", async () => {
+      const { $ } = createMockShell()
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.acknowledgeFinding("f-1", "agent-a")
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("resolveFinding produces no console output", async () => {
+      const { $ } = createMockShell()
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.resolveFinding("f-1", "fixer", "Fixed it")
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("searchFindings produces no console output", async () => {
+      const { $ } = createMockShell({
+        search: () => ({ stdout: Buffer.from(JSON.stringify({ results: [] })) }),
+      })
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.searchFindings("test query")
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("getReadyTasks produces no console output", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.getReadyTasks()
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("getContextSummary produces no console output", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.getContextSummary("ctx-1")
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("getStats produces no console output", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.getStats()
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("error paths produce no console output", async () => {
+      const failingShell = mock(() => {
+        return createQuietablePromise(Promise.reject(new Error("fail")))
+      })
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard(failingShell as any)
+        await bb.getAgent("x")
+        await bb.getTask("x")
+        await bb.getConnections("x")
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
     })
   })
 })

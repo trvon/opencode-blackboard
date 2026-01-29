@@ -1,12 +1,19 @@
 # YAMS Blackboard Plugin for OpenCode
 
-> **EXPERIMENTAL SOFTWARE** - This plugin is under active development. APIs may change without notice. Use at your own risk. Requires yams v0.8.1
+Shared blackboard for multi-agent coordination. Agents post findings, claim tasks, and discover each other's work through [YAMS](https://github.com/trvon/yams).
 
-A **blackboard architecture** plugin enabling agent-to-agent communication through [YAMS](https://github.com/trvon/yams) as shared memory.
+> [!WARNING]
+> **Experimental Software**
+>
+> Under active development. APIs may change without notice. Requires YAMS v0.8.1+.
 
-## Overview
-
-This plugin implements the classic [blackboard pattern](https://en.wikipedia.org/wiki/Blackboard_system) for multi-agent AI systems. Agents post findings, claim tasks, and discover each other's work through a shared knowledge store.
+## Features
+- [Blackboard pattern](https://en.wikipedia.org/wiki/Blackboard_system) for agent-to-agent communication via shared memory
+- Findings with severity, confidence, topics, and lifecycle states (draft/published/acknowledged/resolved)
+- Task coordination with claim-based assignment, dependencies, and priority
+- Context grouping for related findings and tasks
+- Automatic compaction hooks — blackboard state survives session compression
+- All writes tagged `owner=opencode` for cross-agent discovery
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -24,29 +31,17 @@ This plugin implements the classic [blackboard pattern](https://en.wikipedia.org
    └─────────┘        └─────────┘       └────────────┘
 ```
 
-## Installation
+## Install
 
-### 1. Install YAMS
-
-Install the YAMS daemon from [github.com/trvon/yams](https://github.com/trvon/yams):
+### 1. YAMS daemon
 
 ```bash
-# macOS
 brew install trvon/tap/yams
-
-# Or build from source (see YAMS repo for instructions)
-```
-
-Start the daemon:
-
-```bash
 yams daemon start
 yams status  # Should show "running"
 ```
 
-### 2. Add Plugin to OpenCode
-
-Add to your `opencode.json`:
+### 2. OpenCode config
 
 ```json
 {
@@ -55,91 +50,66 @@ Add to your `opencode.json`:
 }
 ```
 
-OpenCode automatically installs npm plugins at startup. No manual build or copy required.
+OpenCode installs npm plugins automatically at startup.
 
 ## Tools
 
-### Agent Management
-
+### Agents
 | Tool | Description |
 |------|-------------|
-| `bb_register_agent` | Register agent identity and capabilities |
-| `bb_list_agents` | List all registered agents |
+| `bb_register_agent` | Register identity and capabilities |
+| `bb_list_agents` | List registered agents |
 
 ### Findings
-
 | Tool | Description |
 |------|-------------|
-| `bb_post_finding` | Post a finding to the blackboard |
-| `bb_query_findings` | Query findings by topic, agent, severity |
+| `bb_post_finding` | Post finding to blackboard |
+| `bb_query_findings` | Query by topic, agent, severity, context |
 | `bb_search_findings` | Semantic search across findings |
-| `bb_get_finding` | Get full details of a finding |
-| `bb_acknowledge_finding` | Mark a finding as acknowledged |
-| `bb_resolve_finding` | Mark a finding as resolved |
+| `bb_get_finding` | Get full finding details |
+| `bb_acknowledge_finding` | Mark as acknowledged |
+| `bb_resolve_finding` | Mark as resolved with explanation |
 
 ### Tasks
-
 | Tool | Description |
 |------|-------------|
-| `bb_create_task` | Create a new task |
-| `bb_get_ready_tasks` | Get tasks ready to work (no blockers) |
+| `bb_create_task` | Create task for agents to claim |
+| `bb_get_ready_tasks` | Get pending tasks with met dependencies |
 | `bb_claim_task` | Claim a pending task |
 | `bb_update_task` | Update task status |
-| `bb_complete_task` | Mark task completed |
-| `bb_fail_task` | Mark task as failed |
-| `bb_query_tasks` | Query tasks by type, status, assignee |
+| `bb_complete_task` | Mark completed with findings/artifacts |
+| `bb_fail_task` | Mark failed with error |
+| `bb_query_tasks` | Query by type, status, assignee |
 
 ### Context & Utility
-
 | Tool | Description |
 |------|-------------|
-| `bb_create_context` | Create a context to group findings/tasks |
-| `bb_get_context_summary` | Get summary of a context |
+| `bb_create_context` | Group related findings/tasks |
+| `bb_get_context_summary` | Summary of context state |
 | `bb_set_context` | Set current working context |
-| `bb_recent_activity` | Get recent findings and tasks |
-| `bb_stats` | Get blackboard statistics |
+| `bb_recent_activity` | Recent findings and task updates |
+| `bb_stats` | Blackboard statistics |
 | `bb_connections` | Explore graph connections |
 
-## Example Workflow
+## Quick Start
 
 ```typescript
-// Agent 1: Security scanner registers and posts finding
-bb_register_agent({
-  id: "scanner",
-  name: "Security Scanner",
-  capabilities: ["security", "code-review"]
-})
+// Scanner registers and posts finding
+bb_register_agent({ id: "scanner", name: "Scanner", capabilities: ["security"] })
 
 bb_post_finding({
-  agent_id: "scanner",
-  topic: "security",
-  title: "SQL Injection in auth.ts:42",
-  severity: "high",
-  confidence: 0.92,
-  content: "Found unsanitized user input passed directly to SQL query...",
+  agent_id: "scanner", topic: "security",
+  title: "SQL Injection in auth.ts:42", severity: "high", confidence: 0.92,
+  content: "Unsanitized user input in SQL query...",
   references: [{ type: "file", target: "src/auth.ts", line_start: 42 }]
 })
 
-// Agent 2: Fixer discovers the finding
+// Fixer discovers, claims task, resolves
 bb_search_findings({ query: "SQL injection" })
-
-// Coordinator creates a task
-bb_create_task({
-  title: "Fix SQL injection vulnerability",
-  type: "fix",
-  created_by: "coordinator",
-  priority: 1
-})
-
-// Fixer claims and works
 bb_claim_task({ task_id: "t-xxx", agent_id: "fixer" })
-bb_update_task({ task_id: "t-xxx", status: "working" })
-
-// Fixer completes and resolves
 bb_complete_task({ task_id: "t-xxx", findings: ["f-fix-001"] })
 bb_resolve_finding({
-  finding_id: "f-original",
-  agent_id: "fixer",
+  finding_id: "f-original", agent_id: "fixer",
   resolution: "Parameterized queries added in PR #123"
 })
 ```
@@ -147,25 +117,23 @@ bb_resolve_finding({
 ## Schemas
 
 ### Finding
-
 ```typescript
 interface Finding {
   id: string
   agent_id: string
-  topic: "security" | "performance" | "bug" | "architecture" | ...
+  topic: "security" | "performance" | "bug" | "architecture" | "refactor" | "test" | "doc" | "dependency" | "accessibility" | "other"
   title: string
-  content: string
-  confidence: number        // 0.0 - 1.0
+  content: string           // markdown
+  confidence: number        // 0.0–1.0
   severity?: "info" | "low" | "medium" | "high" | "critical"
   status: "draft" | "published" | "acknowledged" | "resolved" | "rejected"
-  scope: "session" | "persistent"  // Default: persistent
+  scope: "session" | "persistent"
   context_id?: string
   references?: Reference[]
 }
 ```
 
 ### Task
-
 ```typescript
 interface Task {
   id: string
@@ -176,7 +144,6 @@ interface Task {
   created_by: string
   assigned_to?: string
   depends_on?: string[]
-  findings?: string[]
 }
 ```
 
@@ -184,86 +151,47 @@ See [DESIGN.md](./DESIGN.md) for complete schema documentation.
 
 ## Lifecycle Hooks
 
-The plugin integrates with OpenCode's lifecycle:
+- `session.created` — starts a YAMS session for the conversation
+- `experimental.session.compacting` — injects blackboard summary before compaction prompt
+- `session.compacted` — injects blackboard summary into compaction context
 
-- **`experimental.session.compacting`**: Injects blackboard summary before the compaction prompt is generated
-- **`session.created`**: Starts a YAMS session for the conversation
-- **`session.compacted`**: Injects blackboard summary into compaction context
+## Compaction
 
-## Compaction / Context Recovery
-
-- The plugin automatically pushes a blackboard summary into `output.context` during both `experimental.session.compacting` and `session.compacted`; no extra setup required.
-- To pull recent YAMS memory after compaction, use `yams list` filters (the old `yams hook` command was removed): `yams list --owner opencode --since 24h --limit 20 --format markdown` with optional `--pbi`, `--task`, `--phase`, `--metadata key=value` (repeatable), and `--match-any-metadata`.
-
-Example:
+Blackboard state is automatically pushed into `output.context` during compaction. To manually retrieve shared context:
 
 ```bash
-yams list --owner opencode --since 24h --limit 20 --format markdown --metadata phase=checkpoint
-```
-
-### Owner / multi-agent convention
-
-- When registering agents or posting findings/tasks with this plugin, set `owner=opencode` so multiple agents share the same YAMS ownership namespace. The plugin writes with `--metadata owner=opencode` by default. Use `yams list --owner opencode ...` to retrieve shared context.
-- Recommended coordinator agent for shared runs:
-
-```bash
-bb_register_agent '{"id":"opencode-coordinator","name":"OpenCode Coordinator","capabilities":["coordination","routing","summary"]}'
+yams list --owner opencode --since 24h --limit 20 --format markdown
 ```
 
 ## Persistence
 
-By default, findings are **persistent** (survive across sessions). Use `scope: "session"` for temporary scratch work:
+Findings are persistent by default (survive across sessions). Use `scope: "session"` for temporary data:
 
 ```typescript
-bb_post_finding({
-  // ...
-  scope: "session",
-  ttl: 3600  // Optional: auto-delete after 1 hour
-})
+bb_post_finding({ ..., scope: "session", ttl: 3600 })
 ```
 
-## Architecture
-
-Based on research into multi-agent communication patterns:
-
-- **Blackboard Pattern**: Shared memory over direct messaging for loose coupling
-- **A2A Protocol Concepts**: Structured findings with lifecycle states
-- **Task Coordination**: Claim-based work distribution with dependencies
-
-## Development (Contributors Only)
-
-This section is for contributors developing the plugin itself. Users should install via npm as described above.
+## Development
 
 ```bash
 bun install        # Install dependencies
-bun run build      # Compile index.ts to index.js
+bun run build      # Compile to index.js
 bun run typecheck  # Type check
-bun test           # Run tests
+bun test           # Unit tests
+bun run test:integration  # Integration tests (requires YAMS daemon)
 ```
 
 ## Troubleshooting
 
-### "YAMS daemon not running"
-
 ```bash
-yams daemon start
-yams status  # Should show "running"
+yams daemon start  # "YAMS daemon not running"
+yams status        # Verify daemon is up
 ```
 
-### "Command 'yams' not found"
+**Plugin not loading:** Check `opencode.json` has `"plugin": ["yams-blackboard"]`, restart OpenCode.
 
-YAMS must be installed and in your PATH. See [Installation](#installation).
-
-### Plugin not loading
-
-1. Verify `opencode.json` has `"plugin": ["yams-blackboard"]`
-2. Restart OpenCode to load the plugin
-3. Check OpenCode logs for plugin errors
-
-### Tools not appearing
-
-Start a new session - tools are registered on `session.created`.
+**Tools not appearing:** Start a new session — tools register on `session.created`.
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see [LICENSE](LICENSE) for details.
+GPL-3.0-only — see [LICENSE](LICENSE).
