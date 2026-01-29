@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/trvon/opencode-blackboard/compare/v1.1.1...v1.1.2) (2026-01-29)
+
+
+### Bug Fixes
+
+* bug fixes, readme updates and address compaction gaps ([580f8f9](https://github.com/trvon/opencode-blackboard/commit/580f8f9dccc99b6f07c4ae6d9e3fb0fbb1036b19))
+
 ## [1.1.1](https://github.com/trvon/opencode-blackboard/compare/v1.1.0...v1.1.1) (2026-01-28)
 
 
