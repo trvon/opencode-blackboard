@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/trvon/opencode-blackboard/compare/v1.1.3...v1.2.0) (2026-01-31)
+
+
+### Features
+
+* adding support for metadata extraction bypass in daemon ([7e56575](https://github.com/trvon/opencode-blackboard/commit/7e565756c8ec30078776758894cf2363b48b0458))
+
 ## [1.1.3](https://github.com/trvon/opencode-blackboard/compare/v1.1.2...v1.1.3) (2026-01-29)
 
 
