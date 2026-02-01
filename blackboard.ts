@@ -36,15 +36,22 @@ type Shell = {
 export class YamsBlackboard {
   private sessionName?: string
   private sessionActive = false
+  readonly instanceId: string
 
   constructor(
     private $: Shell,
     private options: {
       sessionName?: string
+      instanceId?: string
       defaultScope?: "session" | "persistent"
     } = {}
   ) {
     this.sessionName = options.sessionName
+    this.instanceId = options.instanceId || crypto.randomUUID()
+  }
+
+  private instanceTag(): string {
+    return `inst:${this.instanceId}`
   }
 
   // ===========================================================================
@@ -167,6 +174,7 @@ export class YamsBlackboard {
     const content = JSON.stringify(full, null, 2)
     const tags = [
       "agent",
+      this.instanceTag(),
       ...agent.capabilities.map(c => `capability:${c}`),
     ].join(",")
 
@@ -186,7 +194,7 @@ export class YamsBlackboard {
 
   async listAgents(): Promise<AgentCard[]> {
     try {
-      const result = await this.yamsJson<{ documents: any[] }>(`list --tags "agent" --match-all-tags --limit 100`)
+      const result = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape(`agent,${this.instanceTag()}`)} --match-all-tags --limit 100`)
       const agents: AgentCard[] = []
       for (const doc of result.documents || []) {
         try {
@@ -205,7 +213,7 @@ export class YamsBlackboard {
     if (agent) {
       agent.status = status
       const content = JSON.stringify(agent, null, 2)
-      await this.yamsStore(content, `agents/${agentId}.json`, "agent")
+      await this.yamsStore(content, `agents/${agentId}.json`, `agent,${this.instanceTag()}`)
     }
   }
 
@@ -248,6 +256,7 @@ ${finding.content}
   private buildFindingTags(finding: Finding | CreateFinding): string {
     const tags = [
       "finding",
+      this.instanceTag(),
       `agent:${finding.agent_id}`,
       `topic:${finding.topic}`,
       `scope:${finding.scope || "persistent"}`,
@@ -307,7 +316,7 @@ ${finding.content}
   }
 
   async queryFindings(query: FindingQuery): Promise<Finding[]> {
-    const tags = ["finding"]
+    const tags = ["finding", this.instanceTag()]
     if (query.topic) tags.push(`topic:${query.topic}`)
     if (query.agent_id) tags.push(`agent:${query.agent_id}`)
     if (query.context_id) tags.push(`ctx:${query.context_id}`)
@@ -341,7 +350,7 @@ ${finding.content}
   }
 
   async searchFindings(query: string, opts?: { topic?: string; limit?: number }): Promise<Finding[]> {
-    const tags = opts?.topic ? `finding,topic:${opts.topic}` : "finding"
+    const tags = opts?.topic ? `finding,${this.instanceTag()},topic:${opts.topic}` : `finding,${this.instanceTag()}`
     const limit = opts?.limit || 10
 
     try {
@@ -401,6 +410,7 @@ ${finding.content}
   private buildTaskTags(task: Task | CreateTask): string {
     const tags = [
       "task",
+      this.instanceTag(),
       `type:${task.type}`,
       `status:${(task as Task).status || "pending"}`,
       `priority:${task.priority}`,
@@ -438,7 +448,7 @@ ${finding.content}
   }
 
   async queryTasks(query: TaskQuery): Promise<Task[]> {
-    const tags = ["task"]
+    const tags = ["task", this.instanceTag()]
     if (query.type) tags.push(`type:${query.type}`)
     if (query.status) tags.push(`status:${query.status}`)
     if (query.priority !== undefined) tags.push(`priority:${query.priority}`)
@@ -557,7 +567,7 @@ ${finding.content}
     }
 
     const content = JSON.stringify(context, null, 2)
-    await this.yamsStore(content, `contexts/${id}.json`, "context,status:active")
+    await this.yamsStore(content, `contexts/${id}.json`, `context,${this.instanceTag()},status:active`)
 
     return context
   }
@@ -582,19 +592,33 @@ ${finding.content}
     const activeTasks = tasks.filter(t => t.status === "working" || t.status === "claimed")
     const blockedTasks = tasks.filter(t => t.status === "blocked")
 
+    // Include actual content for recent high-priority findings
+    const recentFindings = [...highSeverity, ...unresolved.filter(f => f.severity !== "high" && f.severity !== "critical")]
+      .slice(0, 10)
+
+    const findingDetails = recentFindings.map(f => {
+      const truncated = f.content.length > 300 ? f.content.slice(0, 300) + "..." : f.content
+      return `#### [${f.severity?.toUpperCase() || "INFO"}] ${f.title}
+- Agent: ${f.agent_id} | Confidence: ${f.confidence.toFixed(2)} | Status: ${f.status}
+${truncated}`
+    }).join("\n\n")
+
+    const taskDetails = activeTasks.slice(0, 5).map(t => {
+      const desc = t.description ? (t.description.length > 200 ? t.description.slice(0, 200) + "..." : t.description) : ""
+      return `- [${t.status.toUpperCase()}] ${t.title} (assigned: ${t.assigned_to || "unassigned"})${desc ? "\n  " + desc : ""}`
+    }).join("\n")
+
     return `## Blackboard Summary (Context: ${contextId})
 
 ### Agents Active (${activeAgents.length})
 ${activeAgents.map(a => `- ${a.id}: ${a.capabilities.join(", ")}`).join("\n") || "- None"}
 
 ### Key Findings (${findings.length} total, ${unresolved.length} unresolved)
-${highSeverity.slice(0, 5).map(f =>
-  `- [${f.severity?.toUpperCase()}] ${f.title} (${f.agent_id}, ${f.confidence.toFixed(2)} confidence)`
-).join("\n") || "- None"}
-${findings.length > 5 ? `- ... and ${findings.length - 5} more` : ""}
+${findingDetails || "- None"}
+${findings.length > 10 ? `\n- ... and ${findings.length - 10} more findings` : ""}
 
 ### Tasks
-${activeTasks.map(t => `- [${t.status.toUpperCase()}] ${t.title} (assigned: ${t.assigned_to || "unassigned"})`).join("\n") || "- No active tasks"}
+${taskDetails || "- No active tasks"}
 ${blockedTasks.length ? `\n**Blocked (${blockedTasks.length}):**\n${blockedTasks.map(t => `- ${t.title}`).join("\n")}` : ""}
 
 ### Unresolved Issues
@@ -635,7 +659,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
 
     let contextCount = 0
     try {
-      const ctxResult = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape("context")} --match-all-tags --limit 1000`)
+      const ctxResult = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape(`context,${this.instanceTag()}`)} --match-all-tags --limit 1000`)
       contextCount = ctxResult.documents?.length || 0
     } catch { /* contexts unavailable */ }
 

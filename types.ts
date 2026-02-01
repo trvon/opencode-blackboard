@@ -240,6 +240,7 @@ export const FindingQuerySchema = z.object({
   topic: FindingTopic.optional(),
   agent_id: z.string().optional(),
   context_id: z.string().optional(),
+  instance_id: z.string().optional().describe("Filter by instance ID for cross-instance queries"),
   status: FindingStatus.optional(),
   severity: z.array(FindingSeverity).optional(),
   min_confidence: z.number().min(0).max(1).optional(),
@@ -257,6 +258,7 @@ export const TaskQuerySchema = z.object({
   created_by: z.string().optional(),
   assigned_to: z.string().optional(),
   context_id: z.string().optional(),
+  instance_id: z.string().optional().describe("Filter by instance ID for cross-instance queries"),
   limit: z.number().int().positive().default(20),
   offset: z.number().int().nonnegative().default(0),
 })
