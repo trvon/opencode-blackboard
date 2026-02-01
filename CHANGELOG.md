@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/trvon/opencode-blackboard/compare/v1.2.0...v1.3.0) (2026-02-01)
+
+
+### Features
+
+* add instance-level isolation via auto-generated instanceId ([c42d1df](https://github.com/trvon/opencode-blackboard/commit/c42d1dfa917e67cdf23d7eb0cab4db13b3aaad7f))
+
+
+### Bug Fixes
+
+* test fixes ([d8ae331](https://github.com/trvon/opencode-blackboard/commit/d8ae331d8ecfdd7ed3d8e8419faba4fe0e1f4588))
+
 ## [1.2.0](https://github.com/trvon/opencode-blackboard/compare/v1.1.3...v1.2.0) (2026-01-31)
 
 
