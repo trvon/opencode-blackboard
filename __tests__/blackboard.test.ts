@@ -336,7 +336,7 @@ Found SQL injection vulnerability`
 
       const searchCmd = calls.find(c => c.includes("search"))
       expect(searchCmd).toContain("SQL injection")
-      expect(searchCmd).toContain("finding,topic:security")
+      expect(searchCmd).toMatch(/finding,inst:[0-9a-f-]+,topic:security/)
       expect(searchCmd).toContain("--match-all-tags")
       expect(searchCmd).toContain("--limit 5")
     })
