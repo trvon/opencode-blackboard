@@ -628,6 +628,106 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
   }
 
   // ===========================================================================
+  // Search Methods
+  // ===========================================================================
+
+  async searchTasks(query: string, opts?: { type?: string; limit?: number }): Promise<Task[]> {
+    const tags = opts?.type
+      ? `task,${this.instanceTag()},type:${opts.type}`
+      : `task,${this.instanceTag()}`
+    const limit = opts?.limit || 10
+
+    try {
+      const result = await this.yamsJson<{ results: any[] }>(
+        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`
+      )
+
+      const tasks: Task[] = []
+      for (const r of result.results || []) {
+        const id = r.path?.replace("tasks/", "").replace(".json", "")
+        if (id) {
+          const task = await this.getTask(id)
+          if (task) tasks.push(task)
+        }
+      }
+      return tasks
+    } catch {
+      return []
+    }
+  }
+
+  async search(query: string, opts?: { limit?: number }): Promise<{ findings: Finding[]; tasks: Task[] }> {
+    const tags = this.instanceTag()
+    const limit = opts?.limit || 20
+
+    try {
+      const result = await this.yamsJson<{ results: any[] }>(
+        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`
+      )
+
+      const findings: Finding[] = []
+      const tasks: Task[] = []
+
+      for (const r of result.results || []) {
+        const path = r.path || ""
+        if (path.startsWith("findings/")) {
+          const id = path.split("/").pop()?.replace(".md", "")
+          if (id) {
+            const finding = await this.getFinding(id)
+            if (finding) findings.push(finding)
+          }
+        } else if (path.startsWith("tasks/")) {
+          const id = path.replace("tasks/", "").replace(".json", "")
+          if (id) {
+            const task = await this.getTask(id)
+            if (task) tasks.push(task)
+          }
+        }
+      }
+
+      return { findings, tasks }
+    } catch {
+      return { findings: [], tasks: [] }
+    }
+  }
+
+  async grep(pattern: string, opts?: { entity?: "finding" | "task"; limit?: number }): Promise<Array<{ name: string; matches: string[] }>> {
+    const tags = opts?.entity
+      ? `${opts.entity},${this.instanceTag()}`
+      : this.instanceTag()
+    const limit = opts?.limit || 50
+
+    try {
+      const result = await this.yams(
+        `grep ${this.shellEscape(pattern)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} --json`
+      )
+      const parsed = JSON.parse(result)
+
+      // Parse grep output into structured results
+      const entries: Array<{ name: string; matches: string[] }> = []
+      if (parsed.output) {
+        const lines = parsed.output.split("\n").filter((l: string) => l.trim())
+        const byFile = new Map<string, string[]>()
+        for (const line of lines) {
+          const sep = line.indexOf(":")
+          if (sep > 0) {
+            const file = line.slice(0, sep)
+            const match = line.slice(sep + 1)
+            if (!byFile.has(file)) byFile.set(file, [])
+            byFile.get(file)!.push(match)
+          }
+        }
+        for (const [name, matches] of byFile) {
+          entries.push({ name, matches })
+        }
+      }
+      return entries
+    } catch {
+      return []
+    }
+  }
+
+  // ===========================================================================
   // Graph Exploration
   // ===========================================================================
 

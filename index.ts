@@ -464,6 +464,114 @@ Error: ${args.error}`
       }),
 
       // -----------------------------------------------------------------------
+      // Search
+      // -----------------------------------------------------------------------
+
+      bb_search_tasks: tool({
+        description:
+          "Search tasks using natural language. Uses semantic search to find relevant tasks.",
+        args: {
+          query: z.string().min(1).describe("Natural language search query"),
+          type: TaskType.optional().describe("Limit to specific task type"),
+          limit: z.number().int().positive().optional().describe("Max results (default: 10)"),
+        },
+        async execute(args) {
+          const tasks = await blackboard.searchTasks(args.query, {
+            type: args.type,
+            limit: args.limit ?? 10,
+          })
+
+          if (tasks.length === 0) {
+            return "No tasks match the search."
+          }
+
+          return tasks
+            .map(
+              (t) =>
+                `[${t.id}] P${t.priority} ${t.type.toUpperCase()} | ${t.title}
+  Status: ${t.status} | Created: ${t.created_by}${t.assigned_to ? ` | Assigned: ${t.assigned_to}` : ""}
+  ${t.description ? t.description.slice(0, 200) + (t.description.length > 200 ? "..." : "") : ""}`
+            )
+            .join("\n\n")
+        },
+      }),
+
+      bb_search: tool({
+        description:
+          "Unified semantic search across all blackboard entities (findings and tasks). Returns results classified by type.",
+        args: {
+          query: z.string().min(1).describe("Natural language search query"),
+          limit: z.number().int().positive().optional().describe("Max results (default: 20)"),
+        },
+        async execute(args) {
+          const results = await blackboard.search(args.query, {
+            limit: args.limit ?? 20,
+          })
+
+          const output: string[] = []
+
+          if (results.findings.length > 0) {
+            output.push("### Findings")
+            output.push(
+              results.findings
+                .map(
+                  (f) =>
+                    `[${f.id}] ${f.topic.toUpperCase()} | ${f.title}
+  ${f.content.slice(0, 150)}${f.content.length > 150 ? "..." : ""}`
+                )
+                .join("\n\n")
+            )
+          }
+
+          if (results.tasks.length > 0) {
+            output.push("\n### Tasks")
+            output.push(
+              results.tasks
+                .map(
+                  (t) =>
+                    `[${t.id}] P${t.priority} ${t.type.toUpperCase()} | ${t.title}
+  Status: ${t.status}`
+                )
+                .join("\n\n")
+            )
+          }
+
+          if (output.length === 0) {
+            return "No results match the search."
+          }
+
+          return output.join("\n")
+        },
+      }),
+
+      bb_grep: tool({
+        description:
+          "Search blackboard content using regex/pattern matching. Searches across finding and task content.",
+        args: {
+          pattern: z.string().min(1).describe("Regex pattern to search for"),
+          entity: z.enum(["finding", "task"]).optional().describe("Limit to findings or tasks"),
+          limit: z.number().int().positive().optional().describe("Max results (default: 50)"),
+        },
+        async execute(args) {
+          const results = await blackboard.grep(args.pattern, {
+            entity: args.entity,
+            limit: args.limit ?? 50,
+          })
+
+          if (results.length === 0) {
+            return "No matches found."
+          }
+
+          return results
+            .map(
+              (r) =>
+                `**${r.name}**\n${r.matches.slice(0, 5).map((m) => `  ${m}`).join("\n")}${r.matches.length > 5 ? `\n  ... and ${r.matches.length - 5} more matches` : ""}`
+            )
+            .join("\n\n")
+        },
+      }),
+
+      // -----------------------------------------------------------------------
       // Context Management
       // -----------------------------------------------------------------------
 
