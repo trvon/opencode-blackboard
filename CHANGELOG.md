@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/trvon/opencode-blackboard/compare/v1.3.0...v1.4.0) (2026-02-02)
+
+
+### Features
+
+* improvements for yams v0.8.2 ([9396cbc](https://github.com/trvon/opencode-blackboard/commit/9396cbcbe26a9bdb3d3d1de838d3891da3b1df8b))
+
+
+### Bug Fixes
+
+* removing sync command ([0a6e25d](https://github.com/trvon/opencode-blackboard/commit/0a6e25d1a3b957040cd3eeea851320284c4f41a9))
+
 ## [1.3.0](https://github.com/trvon/opencode-blackboard/compare/v1.2.0...v1.3.0) (2026-02-01)
 
 
