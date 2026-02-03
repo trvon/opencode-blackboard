@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/trvon/opencode-blackboard/compare/v1.4.0...v1.5.0) (2026-02-03)
+
+
+### Features
+
+* improvement for context/session management ([5d1b061](https://github.com/trvon/opencode-blackboard/commit/5d1b06110b4ac82305022f2fab80db29bc58d02c))
+
 ## [1.4.0](https://github.com/trvon/opencode-blackboard/compare/v1.3.0...v1.4.0) (2026-02-02)
 
 
