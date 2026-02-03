@@ -48,7 +48,18 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
 
     "experimental.session.compacting": async (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => {
       try {
-        await pushContextSummary(output)
+        // Archive session-scoped findings before compression
+        await blackboard.archiveSessionFindings(input.sessionID)
+
+        // Generate both markdown and manifest
+        const contextId = currentContextId || "default"
+        const { markdown, manifest } = await blackboard.getContextSummaryWithManifest(contextId)
+
+        // Push markdown for human-readable context
+        output.context.push(markdown)
+
+        // Push manifest JSON as comment for machine recovery
+        output.context.push(`\n<!-- BLACKBOARD_MANIFEST:${JSON.stringify(manifest)} -->`)
       } catch {
         // Silent failure - console output breaks OpenCode TUI
       }

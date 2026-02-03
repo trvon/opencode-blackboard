@@ -293,3 +293,36 @@ export interface CompactionSummary {
   unresolved_count: number
   summary_text: string
 }
+
+// =============================================================================
+// Compaction Manifest - Machine-readable summary for post-compression recovery
+// =============================================================================
+
+export interface CompactionManifestFinding {
+  id: string
+  topic: string
+  severity?: string
+  status: string
+  confidence: number
+}
+
+export interface CompactionManifestTask {
+  id: string
+  type: string
+  status: string
+  priority: number
+}
+
+export interface CompactionManifest {
+  contextId: string
+  timestamp: string
+  findingIds: CompactionManifestFinding[]
+  taskIds: CompactionManifestTask[]
+  agentIds: string[]
+  stats: {
+    totalFindings: number
+    unresolvedFindings: number
+    activeTasks: number
+    blockedTasks: number
+  }
+}

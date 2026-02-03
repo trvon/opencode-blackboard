@@ -16,6 +16,7 @@ import type {
   Context,
   CompactionSummary,
   BlackboardStats,
+  CompactionManifest,
 } from "./types"
 
 // Shell type from OpenCode plugin context
@@ -625,6 +626,138 @@ ${blockedTasks.length ? `\n**Blocked (${blockedTasks.length}):**\n${blockedTasks
 ${unresolved.length ? `- ${unresolved.length} findings need resolution` : "- All findings resolved"}
 ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
 `
+  }
+
+  /**
+   * Generate both human-readable markdown and machine-parseable manifest
+   * for post-compression context recovery.
+   */
+  async getContextSummaryWithManifest(contextId: string): Promise<{
+    markdown: string;
+    manifest: CompactionManifest;
+  }> {
+    const findings = await this.queryFindings({ context_id: contextId, limit: 100, offset: 0 })
+    const tasks = await this.queryTasks({ context_id: contextId, limit: 100, offset: 0 })
+    const agents = await this.listAgents()
+
+    const activeAgents = agents.filter(a => a.status === "active")
+    const unresolved = findings.filter(f => f.status !== "resolved")
+    const activeTasks = tasks.filter(t => t.status === "working" || t.status === "claimed")
+    const blockedTasks = tasks.filter(t => t.status === "blocked")
+
+    // Build JSON manifest for machine consumption
+    const manifest: CompactionManifest = {
+      contextId,
+      timestamp: new Date().toISOString(),
+      findingIds: findings.map(f => ({
+        id: f.id || "",
+        topic: f.topic,
+        severity: f.severity,
+        status: f.status,
+        confidence: f.confidence,
+      })),
+      taskIds: tasks.map(t => ({
+        id: t.id || "",
+        type: t.type,
+        status: t.status,
+        priority: t.priority ?? 2,
+      })),
+      agentIds: activeAgents.map(a => a.id),
+      stats: {
+        totalFindings: findings.length,
+        unresolvedFindings: unresolved.length,
+        activeTasks: activeTasks.length,
+        blockedTasks: blockedTasks.length,
+      }
+    }
+
+    // Store manifest to YAMS for later recovery
+    try {
+      await this.yamsStore(
+        JSON.stringify(manifest),
+        `contexts/${contextId}/compaction-manifest.json`,
+        `manifest,ctx:${contextId},scope:persistent`,
+        ""
+      )
+    } catch {
+      // Silent failure - don't break compaction if storage fails
+    }
+
+    return {
+      markdown: await this.getContextSummary(contextId),
+      manifest
+    }
+  }
+
+  /**
+   * Retrieve a previously stored compaction manifest for context recovery.
+   */
+  async getCompactionManifest(contextId: string): Promise<CompactionManifest | null> {
+    try {
+      const result = await this.yams(`cat ${this.shellEscape(`contexts/${contextId}/compaction-manifest.json`)}`)
+      return JSON.parse(result)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Hydrate full findings and tasks from a manifest's IDs.
+   * Used for recovering full context after compression.
+   */
+  async hydrateFromManifest(manifest: CompactionManifest): Promise<{
+    findings: Finding[];
+    tasks: Task[];
+  }> {
+    const findingPromises = manifest.findingIds.map(f =>
+      this.getFinding(f.id).catch(() => null)
+    )
+    const taskPromises = manifest.taskIds.map(t =>
+      this.getTask(t.id).catch(() => null)
+    )
+
+    const [findingResults, taskResults] = await Promise.all([
+      Promise.all(findingPromises),
+      Promise.all(taskPromises)
+    ])
+
+    return {
+      findings: findingResults.filter((f): f is Finding => f !== null),
+      tasks: taskResults.filter((t): t is Task => t !== null),
+    }
+  }
+
+  /**
+   * Archive session-scoped findings before session cleanup.
+   * Re-tags findings as archived instead of deleting them.
+   */
+  async archiveSessionFindings(sessionName: string): Promise<void> {
+    try {
+      // Query session-scoped findings
+      const sessionFindings = await this.queryFindings({
+        scope: "session",
+        limit: 1000,
+        offset: 0
+      })
+
+      for (const finding of sessionFindings) {
+        // Re-tag as archived instead of deleting
+        const archiveTags = [
+          `archived:${sessionName}`,
+          `archived_at:${new Date().toISOString().split("T")[0]}`,
+        ].join(",")
+
+        try {
+          await this.yams(
+            `update --name ${this.shellEscape(`findings/**/${finding.id}.md`)} --tags ${this.shellEscape(archiveTags)} --remove-tags session`
+          )
+        } catch {
+          // Skip individual failures
+        }
+      }
+    } catch {
+      // Silent failure - don't break session cleanup
+    }
   }
 
   // ===========================================================================

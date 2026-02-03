@@ -489,6 +489,332 @@ Found SQL injection vulnerability`
     })
   })
 
+  describe("compaction manifest methods", () => {
+    test("getContextSummaryWithManifest returns both markdown and manifest", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const result = await bb.getContextSummaryWithManifest("test-ctx")
+
+      // Should have markdown
+      expect(result.markdown).toContain("Blackboard Summary")
+      expect(result.markdown).toContain("test-ctx")
+
+      // Should have manifest structure
+      expect(result.manifest.contextId).toBe("test-ctx")
+      expect(result.manifest.timestamp).toBeDefined()
+      expect(result.manifest.findingIds).toEqual([])
+      expect(result.manifest.taskIds).toEqual([])
+      expect(result.manifest.agentIds).toEqual([])
+      expect(result.manifest.stats).toEqual({
+        totalFindings: 0,
+        unresolvedFindings: 0,
+        activeTasks: 0,
+        blockedTasks: 0,
+      })
+    })
+
+    test("getContextSummaryWithManifest stores manifest to YAMS", async () => {
+      const { $, calls } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.getContextSummaryWithManifest("audit-ctx")
+
+      // Should have stored the manifest
+      const storeCmd = calls.find(c => c.includes("compaction-manifest.json"))
+      expect(storeCmd).toBeTruthy()
+      expect(storeCmd).toContain("contexts/audit-ctx/compaction-manifest.json")
+      expect(storeCmd).toContain("manifest,ctx:audit-ctx,scope:persistent")
+    })
+
+    test("getContextSummaryWithManifest includes finding and task IDs in manifest", async () => {
+      const task1 = { id: "t-1", title: "T1", type: "review", status: "working", priority: 1, created_by: "a" }
+
+      const { $ } = createMockShell({
+        "list": (cmd: string) => {
+          // Tags parameter contains comma-separated values like "finding,inst:xxx" or "task,inst:xxx"
+          if (cmd.includes("--tags") && cmd.includes("'finding,")) {
+            return { stdout: Buffer.from(JSON.stringify({ documents: [{ name: "findings/security/f-1.md" }] })) }
+          }
+          if (cmd.includes("--tags") && cmd.includes("'task,")) {
+            return { stdout: Buffer.from(JSON.stringify({ documents: [{ name: "tasks/t-1.json" }] })) }
+          }
+          if (cmd.includes("--tags") && cmd.includes("'agent,")) {
+            return { stdout: Buffer.from(JSON.stringify({ documents: [] })) }
+          }
+          return { stdout: Buffer.from(JSON.stringify({ documents: [] })) }
+        },
+        "f-1.md": () => ({ stdout: Buffer.from(`---
+id: "f-1"
+agent_id: "a"
+topic: "security"
+confidence: 0.9
+status: "published"
+scope: "persistent"
+---
+
+# F1
+
+c`) }),
+        "t-1.json": () => ({ stdout: Buffer.from(JSON.stringify(task1)) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const result = await bb.getContextSummaryWithManifest("test-ctx")
+
+      expect(result.manifest.findingIds.length).toBe(1)
+      expect(result.manifest.findingIds[0].id).toBe("f-1")
+      expect(result.manifest.findingIds[0].topic).toBe("security")
+
+      expect(result.manifest.taskIds.length).toBe(1)
+      expect(result.manifest.taskIds[0].id).toBe("t-1")
+      expect(result.manifest.taskIds[0].type).toBe("review")
+      expect(result.manifest.taskIds[0].status).toBe("working")
+
+      expect(result.manifest.stats.totalFindings).toBe(1)
+      expect(result.manifest.stats.activeTasks).toBe(1)
+    })
+
+    test("getCompactionManifest retrieves stored manifest", async () => {
+      const storedManifest = {
+        contextId: "recovered-ctx",
+        timestamp: "2025-01-01T00:00:00.000Z",
+        findingIds: [{ id: "f-1", topic: "security", status: "published", confidence: 0.9 }],
+        taskIds: [{ id: "t-1", type: "review", status: "pending", priority: 2 }],
+        agentIds: ["agent-1"],
+        stats: { totalFindings: 1, unresolvedFindings: 1, activeTasks: 0, blockedTasks: 0 },
+      }
+
+      const { $ } = createMockShell({
+        cat: () => ({ stdout: Buffer.from(JSON.stringify(storedManifest)) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const manifest = await bb.getCompactionManifest("recovered-ctx")
+
+      expect(manifest).not.toBeNull()
+      expect(manifest!.contextId).toBe("recovered-ctx")
+      expect(manifest!.findingIds.length).toBe(1)
+      expect(manifest!.taskIds.length).toBe(1)
+      expect(manifest!.agentIds).toContain("agent-1")
+    })
+
+    test("getCompactionManifest returns null when manifest not found", async () => {
+      const failingShell = mock(() => {
+        return createQuietablePromise(Promise.reject(new Error("not found")))
+      })
+
+      const bb = new YamsBlackboard(failingShell as any)
+      const manifest = await bb.getCompactionManifest("nonexistent")
+      expect(manifest).toBeNull()
+    })
+
+    test("hydrateFromManifest loads findings and tasks from IDs", async () => {
+      const finding1 = `---
+id: "f-1"
+agent_id: "a"
+topic: "security"
+confidence: 0.9
+status: "published"
+scope: "persistent"
+---
+
+# Test Finding
+
+Content here`
+
+      const task1 = { id: "t-1", title: "Test Task", type: "review", status: "pending", priority: 2, created_by: "a" }
+
+      const { $ } = createMockShell({
+        "findings/**": () => ({ stdout: Buffer.from(finding1) }),
+        "tasks/t-1.json": () => ({ stdout: Buffer.from(JSON.stringify(task1)) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      const manifest = {
+        contextId: "test",
+        timestamp: "2025-01-01T00:00:00.000Z",
+        findingIds: [{ id: "f-1", topic: "security", status: "published", confidence: 0.9 }],
+        taskIds: [{ id: "t-1", type: "review", status: "pending", priority: 2 }],
+        agentIds: [],
+        stats: { totalFindings: 1, unresolvedFindings: 1, activeTasks: 0, blockedTasks: 0 },
+      }
+
+      const result = await bb.hydrateFromManifest(manifest)
+
+      expect(result.findings.length).toBe(1)
+      expect(result.findings[0].id).toBe("f-1")
+      expect(result.findings[0].topic).toBe("security")
+
+      expect(result.tasks.length).toBe(1)
+      expect(result.tasks[0].id).toBe("t-1")
+      expect(result.tasks[0].title).toBe("Test Task")
+    })
+
+    test("hydrateFromManifest filters out null results from failed lookups", async () => {
+      const task1 = { id: "t-1", title: "Test Task", type: "review", status: "pending", priority: 2, created_by: "a" }
+
+      const { $ } = createMockShell({
+        "findings/**": () => { throw new Error("not found") },
+        "tasks/t-1.json": () => ({ stdout: Buffer.from(JSON.stringify(task1)) }),
+        "tasks/t-2.json": () => { throw new Error("not found") },
+      })
+
+      const bb = new YamsBlackboard($)
+      const manifest = {
+        contextId: "test",
+        timestamp: "2025-01-01T00:00:00.000Z",
+        findingIds: [{ id: "f-missing", topic: "security", status: "published", confidence: 0.9 }],
+        taskIds: [
+          { id: "t-1", type: "review", status: "pending", priority: 2 },
+          { id: "t-2", type: "fix", status: "pending", priority: 1 },
+        ],
+        agentIds: [],
+        stats: { totalFindings: 1, unresolvedFindings: 1, activeTasks: 0, blockedTasks: 0 },
+      }
+
+      const result = await bb.hydrateFromManifest(manifest)
+
+      // Finding lookup failed, should be filtered out
+      expect(result.findings.length).toBe(0)
+      // One task found, one failed
+      expect(result.tasks.length).toBe(1)
+      expect(result.tasks[0].id).toBe("t-1")
+    })
+
+    test("archiveSessionFindings re-tags session findings", async () => {
+      const sessionFinding = `---
+id: "f-session-1"
+agent_id: "a"
+topic: "security"
+confidence: 0.9
+status: "published"
+scope: "session"
+---
+
+# Session Finding
+
+Content`
+
+      const { $, calls } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [{ name: "findings/security/f-session-1.md" }] })) }),
+        "cat": () => ({ stdout: Buffer.from(sessionFinding) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.archiveSessionFindings("my-session")
+
+      // Should have called update with archive tags and remove session tag
+      const updateCmd = calls.find(c => c.includes("update") && c.includes("--remove-tags"))
+      expect(updateCmd).toBeTruthy()
+      expect(updateCmd).toContain("archived:my-session")
+      expect(updateCmd).toContain("--remove-tags session")
+    })
+
+    test("archiveSessionFindings handles empty session findings gracefully", async () => {
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      // Should not throw
+      await bb.archiveSessionFindings("empty-session")
+    })
+
+    test("archiveSessionFindings continues on individual failures", async () => {
+      const sessionFinding1 = `---
+id: "f-s1"
+agent_id: "a"
+topic: "security"
+confidence: 0.9
+status: "published"
+scope: "session"
+---
+
+# F1
+
+C`
+
+      const sessionFinding2 = `---
+id: "f-s2"
+agent_id: "a"
+topic: "bug"
+confidence: 0.8
+status: "published"
+scope: "session"
+---
+
+# F2
+
+C`
+
+      let updateCallCount = 0
+      const { $ } = createMockShell({
+        "list": () => ({ stdout: Buffer.from(JSON.stringify({ documents: [
+          { name: "findings/security/f-s1.md" },
+          { name: "findings/bug/f-s2.md" },
+        ] })) }),
+        "findings/security/f-s1.md": () => ({ stdout: Buffer.from(sessionFinding1) }),
+        "findings/bug/f-s2.md": () => ({ stdout: Buffer.from(sessionFinding2) }),
+        "update": () => {
+          updateCallCount++
+          if (updateCallCount === 1) {
+            throw new Error("first update failed")
+          }
+          return { stdout: Buffer.from("ok") }
+        },
+      })
+
+      const bb = new YamsBlackboard($)
+      // Should not throw despite first update failing
+      await bb.archiveSessionFindings("test-session")
+    })
+
+    test("getContextSummaryWithManifest produces no console output", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.getContextSummaryWithManifest("ctx-1")
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+
+    test("archiveSessionFindings produces no console output", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const originalLog = console.log
+      const originalError = console.error
+      const output: unknown[] = []
+      console.log = (...args: unknown[]) => output.push(args)
+      console.error = (...args: unknown[]) => output.push(args)
+
+      try {
+        const bb = new YamsBlackboard($)
+        await bb.archiveSessionFindings("test-session")
+        expect(output.length).toBe(0)
+      } finally {
+        console.log = originalLog
+        console.error = originalError
+      }
+    })
+  })
+
   describe("error handling", () => {
     test("yamsJson throws descriptive error on invalid JSON", async () => {
       const { $ } = createMockShell({
