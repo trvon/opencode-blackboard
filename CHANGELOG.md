@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/trvon/opencode-blackboard/compare/v1.5.0...v1.6.0) (2026-02-05)
+
+
+### Features
+
+* add subscription system and fix OpenCode plugin hooks ([23c7967](https://github.com/trvon/opencode-blackboard/commit/23c7967c910d38668c6446ae0b35f6f4f854181b))
+
 ## [1.5.0](https://github.com/trvon/opencode-blackboard/compare/v1.4.0...v1.5.0) (2026-02-03)
 
 
