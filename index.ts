@@ -18,32 +18,30 @@ import {
   TaskStatus,
   TaskPriority,
   ReferenceSchema,
+  SubscriptionPatternType,
+  SubscriptionFiltersSchema,
 } from "./types"
 
 // Named export for explicit imports
 export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) => {
-  // Initialize blackboard (session will be started on session.created hook)
+  // Initialize blackboard (session will be started on session.created event)
   // Cast $ to any to handle Bun shell type differences
   const blackboard = new YamsBlackboard($ as any, { defaultScope: "persistent" })
   let currentContextId: string | undefined
-
-  const pushContextSummary = async (output?: { context: string[] }) => {
-    if (!output || !Array.isArray(output.context)) {
-      return
-    }
-    const contextId = currentContextId || "default"
-    const summary = await blackboard.getContextSummary(contextId)
-    output.context.push(summary)
-  }
 
   return {
     // =========================================================================
     // LIFECYCLE HOOKS
     // =========================================================================
 
-    "session.created": async () => {
-      // Start a YAMS session scoped to this conversation
-      await blackboard.startSession()
+    // Handle session events via the generic event hook
+    event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {
+      if (event.type === "session.created") {
+        // Start a YAMS session scoped to this conversation
+        await blackboard.startSession()
+      }
+      // Note: session.compacted is handled as a notification only - context injection
+      // must happen in experimental.session.compacting (before compaction runs)
     },
 
     "experimental.session.compacting": async (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => {
@@ -65,15 +63,8 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
       }
     },
 
-    "session.compacted": async (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => {
-      // Generate summary of blackboard state for compaction context
-      try {
-        await pushContextSummary(output)
-      } catch {
-        // Don't fail compaction if summary generation fails
-        // Note: Silent failure - console output breaks OpenCode TUI
-      }
-    },
+    // Note: session.compacted event is handled in the event hook above
+    // (events are notification-only and cannot inject context)
 
     // =========================================================================
     // TOOLS
@@ -713,6 +704,196 @@ By Type: ${Object.entries(stats.tasks.by_type).map(([k, v]) => `${k}:${v}`).join
 Found ${graph.nodes.length} connected nodes:
 
 ${JSON.stringify(graph.nodes, null, 2)}`
+        },
+      }),
+
+      // -----------------------------------------------------------------------
+      // Subscription & Notification Management
+      // -----------------------------------------------------------------------
+
+      bb_subscribe: tool({
+        description:
+          "Subscribe to blackboard events matching a pattern. Get notified when findings/tasks matching your criteria are created or updated. Call bb_check_notifications to see what's new.",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+          pattern_type: SubscriptionPatternType.describe(
+            "What to match: 'topic' (finding topic), 'agent' (source agent), 'status', 'context', 'entity' (finding/task)"
+          ),
+          pattern_value: z.string().min(1).describe(
+            "Value to match (e.g., 'security' for topic, 'scanner' for agent, 'finding' for entity)"
+          ),
+          severity_filter: z
+            .array(FindingSeverity)
+            .optional()
+            .describe("Only notify for these severities (e.g., ['high', 'critical'])"),
+          min_confidence: z
+            .number()
+            .min(0)
+            .max(1)
+            .optional()
+            .describe("Minimum confidence threshold"),
+          exclude_self: z
+            .boolean()
+            .optional()
+            .describe("Don't notify on your own actions (default: true)"),
+          expires_in_hours: z
+            .number()
+            .positive()
+            .optional()
+            .describe("Auto-expire subscription after N hours"),
+        },
+        async execute(args) {
+          const expiresAt = args.expires_in_hours
+            ? new Date(Date.now() + args.expires_in_hours * 60 * 60 * 1000).toISOString()
+            : undefined
+
+          const subscription = await blackboard.createSubscription({
+            subscriber_id: args.agent_id,
+            pattern_type: args.pattern_type,
+            pattern_value: args.pattern_value,
+            filters: {
+              severity: args.severity_filter,
+              min_confidence: args.min_confidence,
+              exclude_self: args.exclude_self ?? true,
+            },
+            expires_at: expiresAt,
+          })
+
+          return `Subscription created: ${subscription.id}
+Pattern: ${subscription.pattern_type}:${subscription.pattern_value}
+${args.severity_filter?.length ? `Severity filter: ${args.severity_filter.join(", ")}` : ""}
+${args.min_confidence ? `Min confidence: ${args.min_confidence}` : ""}
+${expiresAt ? `Expires: ${expiresAt}` : "No expiration"}
+
+Use bb_check_notifications to see matching events.`
+        },
+      }),
+
+      bb_unsubscribe: tool({
+        description: "Cancel an active subscription",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+          subscription_id: z.string().min(1).describe("The subscription ID to cancel"),
+        },
+        async execute(args) {
+          const success = await blackboard.cancelSubscription(args.agent_id, args.subscription_id)
+          if (success) {
+            return `Subscription ${args.subscription_id} cancelled.`
+          }
+          return `Failed to cancel subscription ${args.subscription_id}. It may not exist or is already cancelled.`
+        },
+      }),
+
+      bb_list_subscriptions: tool({
+        description: "List your active subscriptions",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+        },
+        async execute(args) {
+          const subscriptions = await blackboard.listSubscriptions(args.agent_id)
+
+          if (subscriptions.length === 0) {
+            return "No active subscriptions."
+          }
+
+          return subscriptions
+            .map(
+              (s) =>
+                `[${s.id}] ${s.pattern_type}:${s.pattern_value}
+  Created: ${s.created_at}${s.expires_at ? ` | Expires: ${s.expires_at}` : ""}
+  ${s.filters?.severity?.length ? `Severity: ${s.filters.severity.join(", ")}` : ""}`
+            )
+            .join("\n\n")
+        },
+      }),
+
+      bb_check_notifications: tool({
+        description:
+          "Check your notification mailbox for new events. Call this at the start of each turn to see what other agents have posted that matches your subscriptions.",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+          limit: z.number().int().positive().optional().describe("Max notifications to return (default: 10)"),
+          mark_as_read: z.boolean().optional().describe("Mark returned notifications as read (default: false)"),
+        },
+        async execute(args) {
+          const notifications = await blackboard.getUnreadNotifications(
+            args.agent_id,
+            args.limit ?? 10
+          )
+
+          if (notifications.length === 0) {
+            return "No new notifications."
+          }
+
+          // Optionally mark as read
+          if (args.mark_as_read) {
+            for (const n of notifications) {
+              await blackboard.markNotificationRead(args.agent_id, n.id)
+            }
+          }
+
+          const output = notifications.map((n) => {
+            const severityStr = n.summary.severity ? ` (${n.summary.severity})` : ""
+            return `[${n.id}] ${n.event_type}: ${n.summary.title}${severityStr}
+  Source: ${n.source_type}/${n.source_id} by ${n.source_agent_id}
+  ${n.summary.topic ? `Topic: ${n.summary.topic} | ` : ""}Time: ${n.created_at}`
+          })
+
+          return `## ${notifications.length} New Notification${notifications.length > 1 ? "s" : ""}
+
+${output.join("\n\n")}${args.mark_as_read ? "\n\n(Marked as read)" : ""}`
+        },
+      }),
+
+      bb_notification_count: tool({
+        description: "Quick count of unread notifications without fetching details",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+        },
+        async execute(args) {
+          const counts = await blackboard.getNotificationCount(args.agent_id)
+          return `Unread: ${counts.unread} | Total: ${counts.total}`
+        },
+      }),
+
+      bb_mark_notification_read: tool({
+        description: "Mark a specific notification as read",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+          notification_id: z.string().min(1).describe("The notification ID to mark as read"),
+        },
+        async execute(args) {
+          const success = await blackboard.markNotificationRead(args.agent_id, args.notification_id)
+          if (success) {
+            return `Notification ${args.notification_id} marked as read.`
+          }
+          return `Failed to mark notification ${args.notification_id} as read.`
+        },
+      }),
+
+      bb_mark_all_read: tool({
+        description: "Mark all notifications as read",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+        },
+        async execute(args) {
+          const count = await blackboard.markAllNotificationsRead(args.agent_id)
+          return `Marked ${count} notification${count !== 1 ? "s" : ""} as read.`
+        },
+      }),
+
+      bb_dismiss_notification: tool({
+        description: "Dismiss a notification permanently (won't show in future queries)",
+        args: {
+          agent_id: z.string().min(1).describe("Your agent identifier"),
+          notification_id: z.string().min(1).describe("The notification ID to dismiss"),
+        },
+        async execute(args) {
+          const success = await blackboard.dismissNotification(args.agent_id, args.notification_id)
+          if (success) {
+            return `Notification ${args.notification_id} dismissed.`
+          }
+          return `Failed to dismiss notification ${args.notification_id}.`
         },
       }),
     },

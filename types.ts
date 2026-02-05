@@ -326,3 +326,90 @@ export interface CompactionManifest {
     blockedTasks: number
   }
 }
+
+// =============================================================================
+// Subscription & Notification System
+// =============================================================================
+
+export const SubscriptionPatternType = z.enum(["topic", "entity", "agent", "status", "context"])
+export type SubscriptionPatternType = z.infer<typeof SubscriptionPatternType>
+
+export const SubscriptionStatus = z.enum(["active", "paused", "expired"])
+export type SubscriptionStatus = z.infer<typeof SubscriptionStatus>
+
+export const SubscriptionFiltersSchema = z.object({
+  severity: z.array(FindingSeverity).optional().describe("Only notify for these severities"),
+  min_confidence: z.number().min(0).max(1).optional().describe("Minimum confidence threshold"),
+  exclude_self: z.boolean().default(true).describe("Don't notify on own actions"),
+})
+
+export type SubscriptionFilters = z.infer<typeof SubscriptionFiltersSchema>
+
+export const SubscriptionSchema = z.object({
+  id: z.string().min(1).describe("Unique subscription identifier"),
+  subscriber_id: z.string().min(1).describe("Agent ID who created this subscription"),
+  pattern_type: SubscriptionPatternType.describe("What to match: topic, entity, agent, status, context"),
+  pattern_value: z.string().min(1).describe("Pattern to match (e.g., 'security' for topic, 'scanner' for agent)"),
+  filters: SubscriptionFiltersSchema.optional(),
+  created_at: z.string().datetime(),
+  expires_at: z.string().datetime().optional().describe("Auto-expire after this time"),
+  status: SubscriptionStatus.default("active"),
+})
+
+export type Subscription = z.infer<typeof SubscriptionSchema>
+
+export const NotificationEventType = z.enum([
+  "finding_created",
+  "finding_updated",
+  "finding_resolved",
+  "task_created",
+  "task_updated",
+  "task_claimed",
+  "task_completed",
+])
+export type NotificationEventType = z.infer<typeof NotificationEventType>
+
+export const NotificationSourceType = z.enum(["finding", "task"])
+export type NotificationSourceType = z.infer<typeof NotificationSourceType>
+
+export const NotificationStatus = z.enum(["unread", "read", "dismissed"])
+export type NotificationStatus = z.infer<typeof NotificationStatus>
+
+export const NotificationSummarySchema = z.object({
+  title: z.string().min(1),
+  topic: z.string().optional(),
+  severity: FindingSeverity.optional(),
+  status: z.string().optional(),
+})
+
+export type NotificationSummary = z.infer<typeof NotificationSummarySchema>
+
+export const NotificationSchema = z.object({
+  id: z.string().min(1).describe("Unique notification identifier"),
+  subscription_id: z.string().min(1).describe("Subscription that triggered this"),
+  event_type: NotificationEventType.describe("What happened"),
+  source_id: z.string().min(1).describe("ID of the finding/task that triggered this"),
+  source_type: NotificationSourceType.describe("Whether source is finding or task"),
+  source_agent_id: z.string().min(1).describe("Agent that performed the action"),
+  summary: NotificationSummarySchema.describe("Quick overview without fetching full source"),
+  recipient_id: z.string().min(1).describe("Agent who should receive this"),
+  created_at: z.string().datetime(),
+  read_at: z.string().datetime().optional(),
+  status: NotificationStatus.default("unread"),
+})
+
+export type Notification = z.infer<typeof NotificationSchema>
+
+// Event passed to triggerNotifications
+export interface BlackboardEvent {
+  event_type: NotificationEventType
+  source_id: string
+  source_type: "finding" | "task"
+  source_agent_id: string
+  // Event-specific data for matching
+  topic?: string
+  severity?: FindingSeverity
+  status?: string
+  context_id?: string
+  title: string
+}

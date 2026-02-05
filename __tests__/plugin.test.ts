@@ -200,7 +200,7 @@ describe("YamsBlackboardPlugin", () => {
       expect(output.context.some(s => s.includes("Blackboard Summary"))).toBe(true)
     })
 
-    test("session.compacted pushes summary with agent/finding/task sections", async () => {
+    test("experimental.session.compacting includes manifest comment for recovery", async () => {
       const { $ } = createMockShell({
         list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
       })
@@ -209,13 +209,13 @@ describe("YamsBlackboardPlugin", () => {
       })
 
       const output = { context: [] as string[] }
-      await plugin["session.compacted"]!({ summary: "s" } as any, output)
+      await plugin["experimental.session.compacting"]!({ sessionID: "test-session" } as any, output)
 
+      // Should have both markdown summary and manifest comment
       expect(output.context.length).toBeGreaterThanOrEqual(1)
       const content = output.context.join("\n")
-      expect(content).toContain("Agents Active")
-      expect(content).toContain("Key Findings")
-      expect(content).toContain("Tasks")
+      expect(content).toContain("Blackboard Summary")
+      expect(content).toContain("BLACKBOARD_MANIFEST")
     })
   })
 
@@ -228,17 +228,16 @@ describe("YamsBlackboardPlugin", () => {
       directory: "/test/project",
     })
 
+    // Event hook handles session.created and other events
+    expect(plugin.event).toBeDefined()
+    expect(typeof plugin.event).toBe("function")
+
+    // Direct compaction hook (experimental)
     expect(plugin["experimental.session.compacting"]).toBeDefined()
     expect(typeof plugin["experimental.session.compacting"]).toBe("function")
-
-    expect(plugin["session.created"]).toBeDefined()
-    expect(typeof plugin["session.created"]).toBe("function")
-
-    expect(plugin["session.compacted"]).toBeDefined()
-    expect(typeof plugin["session.compacted"]).toBe("function")
   })
 
-  test("session.created does not output to console", async () => {
+  test("event hook handles session.created without console output", async () => {
     const { $ } = createMockShell()
     const originalLog = console.log
     const logCalls: any[] = []
@@ -251,7 +250,8 @@ describe("YamsBlackboardPlugin", () => {
         directory: "/test/project",
       })
 
-      await plugin["session.created"]!()
+      // Trigger session.created event via the event hook
+      await plugin.event!({ event: { type: "session.created" } })
 
       // No console.log calls should have been made
       expect(logCalls.length).toBe(0)
@@ -260,34 +260,30 @@ describe("YamsBlackboardPlugin", () => {
     }
   })
 
-  test("session.compacted does not output to console on error", async () => {
-    // Create a shell that fails but still has .quiet() method
-    const failingShell = mock(() => {
-      return createQuietablePromise(Promise.reject(new Error("Mock failure")))
-    })
-
-    const originalError = console.error
-    const errorCalls: any[] = []
-    console.error = (...args: any[]) => errorCalls.push(args)
+  test("event hook handles session.compacted as notification (no output)", async () => {
+    const { $ } = createMockShell()
+    const originalLog = console.log
+    const logCalls: any[] = []
+    console.log = (...args: any[]) => logCalls.push(args)
 
     try {
       const plugin = await YamsBlackboardPlugin({
-        $: failingShell as any,
+        $,
         project: { path: "/test/project" } as any,
         directory: "/test/project",
       })
 
-      const output = { context: [] as string[] }
-      await plugin["session.compacted"]!({} as any, output)
+      // session.compacted is now just a notification event - no output injection
+      await plugin.event!({ event: { type: "session.compacted" } })
 
-      // No console.error calls should have been made
-      expect(errorCalls.length).toBe(0)
+      // Should not throw and should not log
+      expect(logCalls.length).toBe(0)
     } finally {
-      console.error = originalError
+      console.log = originalLog
     }
   })
 
-  test("compaction hooks append context safely", async () => {
+  test("compaction hook appends context safely without console output", async () => {
     const { $ } = createMockShell()
 
     const plugin = await YamsBlackboardPlugin({
@@ -296,11 +292,6 @@ describe("YamsBlackboardPlugin", () => {
       directory: "/test/project",
     })
 
-    const output = { context: [] as string[] }
-    await plugin["experimental.session.compacting"]!({ summary: "s" } as any, output)
-    await plugin["session.compacted"]!({ summary: "s" } as any, output)
-
-    expect(output.context.length).toBeGreaterThanOrEqual(1)
     // Ensure no console output leaked during hook execution
     const originalLog = console.log
     const originalError = console.error
@@ -309,9 +300,10 @@ describe("YamsBlackboardPlugin", () => {
     console.log = (...args: any[]) => logCalls.push(args)
     console.error = (...args: any[]) => errorCalls.push(args)
     try {
-      const output2 = { context: [] as string[] }
-      await plugin["experimental.session.compacting"]!({ summary: "s" } as any, output2)
-      await plugin["session.compacted"]!({ summary: "s" } as any, output2)
+      const output = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ sessionID: "test" } as any, output)
+      
+      expect(output.context.length).toBeGreaterThanOrEqual(1)
       expect(logCalls.length).toBe(0)
       expect(errorCalls.length).toBe(0)
     } finally {

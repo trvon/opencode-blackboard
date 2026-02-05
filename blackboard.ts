@@ -17,6 +17,12 @@ import type {
   CompactionSummary,
   BlackboardStats,
   CompactionManifest,
+  Subscription,
+  SubscriptionFilters,
+  Notification,
+  BlackboardEvent,
+  NotificationEventType,
+  FindingSeverity,
 } from "./types"
 
 // Shell type from OpenCode plugin context
@@ -283,6 +289,19 @@ ${finding.content}
 
     await this.yamsStore(md, name, tags, this.sessionArg())
 
+    // Trigger notifications for subscribers
+    await this.triggerNotifications({
+      event_type: "finding_created",
+      source_id: id,
+      source_type: "finding",
+      source_agent_id: finding.agent_id,
+      topic: finding.topic,
+      severity: finding.severity,
+      status: finding.status,
+      context_id: finding.context_id,
+      title: finding.title,
+    })
+
     return finding
   }
 
@@ -394,6 +413,7 @@ ${finding.content}
     resolvedBy: string,
     resolution: string
   ): Promise<void> {
+    const finding = await this.getFinding(findingId)
     const metaArgs = this.buildMetadataArgs({
       resolved_by: resolvedBy,
       resolution,
@@ -402,6 +422,21 @@ ${finding.content}
     await this.yams(
       `update --name ${this.shellEscape(`findings/**/${findingId}.md`)} --tags ${this.shellEscape("status:resolved")} ${metaArgs}`
     )
+
+    // Trigger notifications for resolution
+    if (finding) {
+      await this.triggerNotifications({
+        event_type: "finding_resolved",
+        source_id: findingId,
+        source_type: "finding",
+        source_agent_id: resolvedBy,
+        topic: finding.topic,
+        severity: finding.severity,
+        status: "resolved",
+        context_id: finding.context_id,
+        title: finding.title,
+      })
+    }
   }
 
   // ===========================================================================
@@ -435,6 +470,17 @@ ${finding.content}
     const tags = this.buildTaskTags(task)
 
     await this.yamsStore(content, `tasks/${id}.json`, tags, this.sessionArg())
+
+    // Trigger notifications for task creation
+    await this.triggerNotifications({
+      event_type: "task_created",
+      source_id: id,
+      source_type: "task",
+      source_agent_id: task.created_by,
+      status: task.status,
+      context_id: task.context_id,
+      title: task.title,
+    })
 
     return task
   }
@@ -513,6 +559,17 @@ ${finding.content}
 
     await this.yamsStore(content, `tasks/${taskId}.json`, tags)
 
+    // Trigger notifications for task claim
+    await this.triggerNotifications({
+      event_type: "task_claimed",
+      source_id: taskId,
+      source_type: "task",
+      source_agent_id: agentId,
+      status: task.status,
+      context_id: task.context_id,
+      title: task.title,
+    })
+
     return task
   }
 
@@ -523,12 +580,29 @@ ${finding.content}
     const task = await this.getTask(taskId)
     if (!task) return null
 
+    const previousStatus = task.status
     Object.assign(task, updates)
 
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
     await this.yamsStore(content, `tasks/${taskId}.json`, tags)
+
+    // Trigger notifications if status changed
+    if (updates.status && updates.status !== previousStatus) {
+      const eventType: NotificationEventType =
+        updates.status === "completed" ? "task_completed" : "task_updated"
+
+      await this.triggerNotifications({
+        event_type: eventType,
+        source_id: taskId,
+        source_type: "task",
+        source_agent_id: task.assigned_to || task.created_by,
+        status: task.status,
+        context_id: task.context_id,
+        title: task.title,
+      })
+    }
 
     return task
   }
@@ -929,5 +1003,352 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       },
       contexts: contextCount,
     }
+  }
+
+  // ===========================================================================
+  // Subscription Management
+  // ===========================================================================
+
+  async createSubscription(input: {
+    subscriber_id: string
+    pattern_type: "topic" | "entity" | "agent" | "status" | "context"
+    pattern_value: string
+    filters?: SubscriptionFilters
+    expires_at?: string
+  }): Promise<Subscription> {
+    const id = this.genId("sub")
+    const subscription: Subscription = {
+      id,
+      subscriber_id: input.subscriber_id,
+      pattern_type: input.pattern_type,
+      pattern_value: input.pattern_value,
+      filters: input.filters,
+      created_at: this.nowISO(),
+      expires_at: input.expires_at,
+      status: "active",
+    }
+
+    const content = JSON.stringify(subscription, null, 2)
+    const tags = [
+      "subscription",
+      this.instanceTag(),
+      `subscriber:${subscription.subscriber_id}`,
+      `pattern:${subscription.pattern_type}:${subscription.pattern_value}`,
+      "status:active",
+    ].join(",")
+
+    await this.yamsStore(
+      content,
+      `subscriptions/${subscription.subscriber_id}/${id}.json`,
+      tags,
+      this.sessionArg()
+    )
+
+    return subscription
+  }
+
+  async getSubscription(subscriberId: string, subscriptionId: string): Promise<Subscription | null> {
+    try {
+      const result = await this.yams(
+        `cat ${this.shellEscape(`subscriptions/${subscriberId}/${subscriptionId}.json`)}`
+      )
+      return JSON.parse(result)
+    } catch {
+      return null
+    }
+  }
+
+  async listSubscriptions(subscriberId: string): Promise<Subscription[]> {
+    try {
+      const result = await this.yamsJson<{ documents: any[] }>(
+        `list --tags ${this.shellEscape(`subscription,${this.instanceTag()},subscriber:${subscriberId}`)} --match-all-tags --limit 100`
+      )
+
+      const subscriptions: Subscription[] = []
+      for (const doc of result.documents || []) {
+        try {
+          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
+          const sub = JSON.parse(content)
+          // Filter out expired subscriptions
+          if (sub.expires_at && new Date(sub.expires_at) < new Date()) {
+            continue
+          }
+          if (sub.status === "active") {
+            subscriptions.push(sub)
+          }
+        } catch { /* skip malformed */ }
+      }
+      return subscriptions
+    } catch {
+      return []
+    }
+  }
+
+  async cancelSubscription(subscriberId: string, subscriptionId: string): Promise<boolean> {
+    try {
+      const sub = await this.getSubscription(subscriberId, subscriptionId)
+      if (!sub) return false
+
+      sub.status = "expired"
+      const content = JSON.stringify(sub, null, 2)
+      const tags = [
+        "subscription",
+        this.instanceTag(),
+        `subscriber:${sub.subscriber_id}`,
+        `pattern:${sub.pattern_type}:${sub.pattern_value}`,
+        "status:expired",
+      ].join(",")
+
+      await this.yamsStore(
+        content,
+        `subscriptions/${subscriberId}/${subscriptionId}.json`,
+        tags
+      )
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async findMatchingSubscriptions(event: BlackboardEvent): Promise<Subscription[]> {
+    const matching: Subscription[] = []
+
+    // Query active subscriptions
+    try {
+      const result = await this.yamsJson<{ documents: any[] }>(
+        `list --tags ${this.shellEscape(`subscription,${this.instanceTag()},status:active`)} --match-all-tags --limit 500`
+      )
+
+      for (const doc of result.documents || []) {
+        try {
+          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
+          const sub: Subscription = JSON.parse(content)
+
+          // Check expiration
+          if (sub.expires_at && new Date(sub.expires_at) < new Date()) {
+            continue
+          }
+
+          // Check exclude_self filter
+          if (sub.filters?.exclude_self !== false && sub.subscriber_id === event.source_agent_id) {
+            continue
+          }
+
+          // Match based on pattern type
+          let matches = false
+          switch (sub.pattern_type) {
+            case "topic":
+              matches = event.topic === sub.pattern_value
+              break
+            case "agent":
+              matches = event.source_agent_id === sub.pattern_value
+              break
+            case "status":
+              matches = event.status === sub.pattern_value
+              break
+            case "context":
+              matches = event.context_id === sub.pattern_value
+              break
+            case "entity":
+              // Entity type matches (finding or task)
+              matches = event.source_type === sub.pattern_value
+              break
+          }
+
+          if (!matches) continue
+
+          // Apply additional filters
+          if (sub.filters?.severity?.length && event.severity) {
+            if (!sub.filters.severity.includes(event.severity)) {
+              continue
+            }
+          }
+
+          matching.push(sub)
+        } catch { /* skip malformed */ }
+      }
+    } catch { /* no subscriptions */ }
+
+    return matching
+  }
+
+  // ===========================================================================
+  // Notification Management
+  // ===========================================================================
+
+  async createNotification(input: {
+    subscription_id: string
+    event_type: NotificationEventType
+    source_id: string
+    source_type: "finding" | "task"
+    source_agent_id: string
+    summary: { title: string; topic?: string; severity?: FindingSeverity; status?: string }
+    recipient_id: string
+  }): Promise<Notification> {
+    const id = this.genId("notif")
+    const notification: Notification = {
+      id,
+      subscription_id: input.subscription_id,
+      event_type: input.event_type,
+      source_id: input.source_id,
+      source_type: input.source_type,
+      source_agent_id: input.source_agent_id,
+      summary: input.summary,
+      recipient_id: input.recipient_id,
+      created_at: this.nowISO(),
+      status: "unread",
+    }
+
+    const content = JSON.stringify(notification, null, 2)
+    const tags = [
+      "notification",
+      this.instanceTag(),
+      `recipient:${notification.recipient_id}`,
+      `event:${notification.event_type}`,
+      "status:unread",
+    ].join(",")
+
+    await this.yamsStore(
+      content,
+      `notifications/${notification.recipient_id}/${id}.json`,
+      tags,
+      this.sessionArg()
+    )
+
+    return notification
+  }
+
+  async getUnreadNotifications(recipientId: string, limit = 20): Promise<Notification[]> {
+    try {
+      const result = await this.yamsJson<{ documents: any[] }>(
+        `list --tags ${this.shellEscape(`notification,${this.instanceTag()},recipient:${recipientId},status:unread`)} --match-all-tags --limit ${limit}`
+      )
+
+      const notifications: Notification[] = []
+      for (const doc of result.documents || []) {
+        try {
+          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
+          notifications.push(JSON.parse(content))
+        } catch { /* skip malformed */ }
+      }
+
+      // Sort by created_at descending (newest first)
+      return notifications.sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )
+    } catch {
+      return []
+    }
+  }
+
+  async markNotificationRead(recipientId: string, notificationId: string): Promise<boolean> {
+    try {
+      const path = `notifications/${recipientId}/${notificationId}.json`
+      const content = await this.yams(`cat ${this.shellEscape(path)}`)
+      const notification: Notification = JSON.parse(content)
+
+      notification.status = "read"
+      notification.read_at = this.nowISO()
+
+      const tags = [
+        "notification",
+        this.instanceTag(),
+        `recipient:${notification.recipient_id}`,
+        `event:${notification.event_type}`,
+        "status:read",
+      ].join(",")
+
+      await this.yamsStore(JSON.stringify(notification, null, 2), path, tags)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async markAllNotificationsRead(recipientId: string): Promise<number> {
+    const unread = await this.getUnreadNotifications(recipientId, 100)
+    let count = 0
+
+    for (const notification of unread) {
+      if (await this.markNotificationRead(recipientId, notification.id)) {
+        count++
+      }
+    }
+
+    return count
+  }
+
+  async dismissNotification(recipientId: string, notificationId: string): Promise<boolean> {
+    try {
+      const path = `notifications/${recipientId}/${notificationId}.json`
+      const content = await this.yams(`cat ${this.shellEscape(path)}`)
+      const notification: Notification = JSON.parse(content)
+
+      notification.status = "dismissed"
+
+      const tags = [
+        "notification",
+        this.instanceTag(),
+        `recipient:${notification.recipient_id}`,
+        `event:${notification.event_type}`,
+        "status:dismissed",
+      ].join(",")
+
+      await this.yamsStore(JSON.stringify(notification, null, 2), path, tags)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async getNotificationCount(recipientId: string): Promise<{ unread: number; total: number }> {
+    try {
+      // Count unread
+      const unreadResult = await this.yamsJson<{ documents: any[] }>(
+        `list --tags ${this.shellEscape(`notification,${this.instanceTag()},recipient:${recipientId},status:unread`)} --match-all-tags --limit 1000`
+      )
+      const unread = unreadResult.documents?.length || 0
+
+      // Count total (all statuses)
+      const totalResult = await this.yamsJson<{ documents: any[] }>(
+        `list --tags ${this.shellEscape(`notification,${this.instanceTag()},recipient:${recipientId}`)} --match-all-tags --limit 1000`
+      )
+      const total = totalResult.documents?.length || 0
+
+      return { unread, total }
+    } catch {
+      return { unread: 0, total: 0 }
+    }
+  }
+
+  // ===========================================================================
+  // Trigger Integration
+  // ===========================================================================
+
+  async triggerNotifications(event: BlackboardEvent): Promise<number> {
+    const matchingSubscriptions = await this.findMatchingSubscriptions(event)
+    let created = 0
+
+    for (const sub of matchingSubscriptions) {
+      try {
+        await this.createNotification({
+          subscription_id: sub.id,
+          event_type: event.event_type,
+          source_id: event.source_id,
+          source_type: event.source_type,
+          source_agent_id: event.source_agent_id,
+          summary: {
+            title: event.title,
+            topic: event.topic,
+            severity: event.severity,
+            status: event.status,
+          },
+          recipient_id: sub.subscriber_id,
+        })
+        created++
+      } catch { /* skip failed notifications */ }
+    }
+
+    return created
   }
 }
