@@ -25,3 +25,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local tooling
+.claude
+scripts
+TESTING.md
+.env.example
