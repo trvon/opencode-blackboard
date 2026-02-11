@@ -158,8 +158,23 @@ export class YamsBlackboard {
 
   async stopSession(): Promise<void> {
     if (this.sessionName && this.sessionActive) {
+      // Reconcile session to global before closing
+      await this.reconcile()
       await this.yams(`session close`)
       this.sessionActive = false
+    }
+  }
+
+  /**
+   * Reconcile session documents to global corpus.
+   * This makes findings/tasks discoverable across sessions.
+   */
+  async reconcile(): Promise<void> {
+    if (!this.sessionName) return
+    try {
+      await this.yams(`session merge ${this.shellEscape(this.sessionName)}`)
+    } catch {
+      // Silent failure - don't break workflow if merge fails
     }
   }
 
@@ -199,9 +214,11 @@ export class YamsBlackboard {
     }
   }
 
-  async listAgents(): Promise<AgentCard[]> {
+  async listAgents(opts?: { instance_id?: string }): Promise<AgentCard[]> {
     try {
-      const result = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape(`agent,${this.instanceTag()}`)} --match-all-tags --limit 100`)
+      const tags = opts?.instance_id ? `agent,inst:${opts.instance_id}` : "agent"
+      const matchAll = opts?.instance_id ? "--match-all-tags " : ""
+      const result = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape(tags)} ${matchAll}--limit 100`)
       const agents: AgentCard[] = []
       for (const doc of result.documents || []) {
         try {
@@ -289,6 +306,9 @@ ${finding.content}
 
     await this.yamsStore(md, name, tags, this.sessionArg())
 
+    // Auto-reconcile to global corpus for cross-session discovery
+    await this.reconcile()
+
     // Trigger notifications for subscribers
     await this.triggerNotifications({
       event_type: "finding_created",
@@ -336,20 +356,18 @@ ${finding.content}
   }
 
   async queryFindings(query: FindingQuery): Promise<Finding[]> {
-    const tags = ["finding", this.instanceTag()]
+    const tags = ["finding"]
+    // Only filter by instance if explicitly requested
+    if (query.instance_id) tags.push(`inst:${query.instance_id}`)
     if (query.topic) tags.push(`topic:${query.topic}`)
     if (query.agent_id) tags.push(`agent:${query.agent_id}`)
-    if (query.context_id) tags.push(`ctx:${query.context_id}`)
-    if (query.status) tags.push(`status:${query.status}`)
+    if (query.severity) query.severity.forEach(s => tags.push(`severity:${s}`))
     if (query.scope) tags.push(`scope:${query.scope}`)
-    if (query.severity?.length) {
-      // For multiple severities, we'd need to query each
-      tags.push(`severity:${query.severity[0]}`)
-    }
+    if (query.status) tags.push(`status:${query.status}`)
 
     try {
       const result = await this.yamsJson<{ documents: any[] }>(
-        `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
+        `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset}`
       )
 
       const findings: Finding[] = []
@@ -369,13 +387,16 @@ ${finding.content}
     }
   }
 
-  async searchFindings(query: string, opts?: { topic?: string; limit?: number }): Promise<Finding[]> {
-    const tags = opts?.topic ? `finding,${this.instanceTag()},topic:${opts.topic}` : `finding,${this.instanceTag()}`
+  async searchFindings(query: string, opts?: { topic?: string; limit?: number; instance_id?: string }): Promise<Finding[]> {
+    const tagsParts = ["finding"]
+    if (opts?.instance_id) tagsParts.push(`inst:${opts.instance_id}`)
+    if (opts?.topic) tagsParts.push(`topic:${opts.topic}`)
+    const tags = tagsParts.join(",")
     const limit = opts?.limit || 10
 
     try {
       const result = await this.yamsJson<{ results: any[] }>(
-        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`
+        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit}`
       )
 
       const findings: Finding[] = []
@@ -471,6 +492,9 @@ ${finding.content}
 
     await this.yamsStore(content, `tasks/${id}.json`, tags, this.sessionArg())
 
+    // Auto-reconcile to global corpus for cross-session discovery
+    await this.reconcile()
+
     // Trigger notifications for task creation
     await this.triggerNotifications({
       event_type: "task_created",
@@ -495,7 +519,8 @@ ${finding.content}
   }
 
   async queryTasks(query: TaskQuery): Promise<Task[]> {
-    const tags = ["task", this.instanceTag()]
+    const tags = ["task"]
+    if (query.instance_id) tags.push(`inst:${query.instance_id}`)
     if (query.type) tags.push(`type:${query.type}`)
     if (query.status) tags.push(`status:${query.status}`)
     if (query.priority !== undefined) tags.push(`priority:${query.priority}`)
@@ -505,7 +530,7 @@ ${finding.content}
 
     try {
       const result = await this.yamsJson<{ documents: any[] }>(
-        `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`
+        `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset}`
       )
 
       const tasks: Task[] = []
@@ -838,15 +863,16 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
   // Search Methods
   // ===========================================================================
 
-  async searchTasks(query: string, opts?: { type?: string; limit?: number }): Promise<Task[]> {
-    const tags = opts?.type
-      ? `task,${this.instanceTag()},type:${opts.type}`
-      : `task,${this.instanceTag()}`
+  async searchTasks(query: string, opts?: { type?: string; limit?: number; instance_id?: string }): Promise<Task[]> {
+    const tagsParts = ["task"]
+    if (opts?.instance_id) tagsParts.push(`inst:${opts.instance_id}`)
+    if (opts?.type) tagsParts.push(`type:${opts.type}`)
+    const tags = tagsParts.join(",")
     const limit = opts?.limit || 10
 
     try {
       const result = await this.yamsJson<{ results: any[] }>(
-        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`
+        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit}`
       )
 
       const tasks: Task[] = []
@@ -863,13 +889,14 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
     }
   }
 
-  async search(query: string, opts?: { limit?: number }): Promise<{ findings: Finding[]; tasks: Task[] }> {
-    const tags = this.instanceTag()
+  async search(query: string, opts?: { limit?: number; instance_id?: string }): Promise<{ findings: Finding[]; tasks: Task[] }> {
+    const tags = opts?.instance_id ? `inst:${opts.instance_id}` : ""
     const limit = opts?.limit || 20
 
     try {
+      const tagArg = tags ? `--tags ${this.shellEscape(tags)} --match-all-tags ` : ""
       const result = await this.yamsJson<{ results: any[] }>(
-        `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`
+        `search ${this.shellEscape(query)} ${tagArg}--limit ${limit}`
       )
 
       const findings: Finding[] = []
@@ -898,15 +925,17 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
     }
   }
 
-  async grep(pattern: string, opts?: { entity?: "finding" | "task"; limit?: number }): Promise<Array<{ name: string; matches: string[] }>> {
-    const tags = opts?.entity
-      ? `${opts.entity},${this.instanceTag()}`
-      : this.instanceTag()
+  async grep(pattern: string, opts?: { entity?: "finding" | "task"; limit?: number; instance_id?: string }): Promise<Array<{ name: string; matches: string[] }>> {
+    const tagsParts: string[] = []
+    if (opts?.entity) tagsParts.push(opts.entity)
+    if (opts?.instance_id) tagsParts.push(`inst:${opts.instance_id}`)
+    const tags = tagsParts.join(",")
     const limit = opts?.limit || 50
 
     try {
+      const tagArg = tags ? `--tags ${this.shellEscape(tags)} --match-all-tags ` : ""
       const result = await this.yams(
-        `grep ${this.shellEscape(pattern)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} --json`
+        `grep ${this.shellEscape(pattern)} ${tagArg}--limit ${limit} --json`
       )
       const parsed = JSON.parse(result)
 
@@ -966,7 +995,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
 
     let contextCount = 0
     try {
-      const ctxResult = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape(`context,${this.instanceTag()}`)} --match-all-tags --limit 1000`)
+      const ctxResult = await this.yamsJson<{ documents: any[] }>(`list --tags context --limit 1000`)
       contextCount = ctxResult.documents?.length || 0
     } catch { /* contexts unavailable */ }
 

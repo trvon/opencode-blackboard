@@ -79,9 +79,17 @@ class YamsBlackboard {
   }
   async stopSession() {
     if (this.sessionName && this.sessionActive) {
+      await this.reconcile();
       await this.yams(`session close`);
       this.sessionActive = false;
     }
+  }
+  async reconcile() {
+    if (!this.sessionName)
+      return;
+    try {
+      await this.yams(`session merge ${this.shellEscape(this.sessionName)}`);
+    } catch {}
   }
   getSessionName() {
     return this.sessionName;
@@ -109,9 +117,11 @@ class YamsBlackboard {
       return null;
     }
   }
-  async listAgents() {
+  async listAgents(opts) {
     try {
-      const result = await this.yamsJson(`list --tags ${this.shellEscape(`agent,${this.instanceTag()}`)} --match-all-tags --limit 100`);
+      const tags = opts?.instance_id ? `agent,inst:${opts.instance_id}` : "agent";
+      const matchAll = opts?.instance_id ? "--match-all-tags " : "";
+      const result = await this.yamsJson(`list --tags ${this.shellEscape(tags)} ${matchAll}--limit 100`);
       const agents = [];
       for (const doc of result.documents || []) {
         try {
@@ -192,6 +202,7 @@ ${finding.content}
     const tags = this.buildFindingTags(finding);
     const name = `findings/${finding.topic}/${id}.md`;
     await this.yamsStore(md, name, tags, this.sessionArg());
+    await this.reconcile();
     await this.triggerNotifications({
       event_type: "finding_created",
       source_id: id,
@@ -233,22 +244,21 @@ ${finding.content}
     }
   }
   async queryFindings(query) {
-    const tags = ["finding", this.instanceTag()];
+    const tags = ["finding"];
+    if (query.instance_id)
+      tags.push(`inst:${query.instance_id}`);
     if (query.topic)
       tags.push(`topic:${query.topic}`);
     if (query.agent_id)
       tags.push(`agent:${query.agent_id}`);
-    if (query.context_id)
-      tags.push(`ctx:${query.context_id}`);
-    if (query.status)
-      tags.push(`status:${query.status}`);
+    if (query.severity)
+      query.severity.forEach((s) => tags.push(`severity:${s}`));
     if (query.scope)
       tags.push(`scope:${query.scope}`);
-    if (query.severity?.length) {
-      tags.push(`severity:${query.severity[0]}`);
-    }
+    if (query.status)
+      tags.push(`status:${query.status}`);
     try {
-      const result = await this.yamsJson(`list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`);
+      const result = await this.yamsJson(`list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset}`);
       const findings = [];
       for (const doc of result.documents || []) {
         const id = doc.name?.split("/").pop()?.replace(".md", "");
@@ -267,10 +277,15 @@ ${finding.content}
     }
   }
   async searchFindings(query, opts) {
-    const tags = opts?.topic ? `finding,${this.instanceTag()},topic:${opts.topic}` : `finding,${this.instanceTag()}`;
+    const tagsParts = ["finding"];
+    if (opts?.instance_id)
+      tagsParts.push(`inst:${opts.instance_id}`);
+    if (opts?.topic)
+      tagsParts.push(`topic:${opts.topic}`);
+    const tags = tagsParts.join(",");
     const limit = opts?.limit || 10;
     try {
-      const result = await this.yamsJson(`search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`);
+      const result = await this.yamsJson(`search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit}`);
       const findings = [];
       for (const r of result.results || []) {
         const id = r.path?.split("/").pop()?.replace(".md", "");
@@ -343,6 +358,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2);
     const tags = this.buildTaskTags(task);
     await this.yamsStore(content, `tasks/${id}.json`, tags, this.sessionArg());
+    await this.reconcile();
     await this.triggerNotifications({
       event_type: "task_created",
       source_id: id,
@@ -363,7 +379,9 @@ ${finding.content}
     }
   }
   async queryTasks(query) {
-    const tags = ["task", this.instanceTag()];
+    const tags = ["task"];
+    if (query.instance_id)
+      tags.push(`inst:${query.instance_id}`);
     if (query.type)
       tags.push(`type:${query.type}`);
     if (query.status)
@@ -377,7 +395,7 @@ ${finding.content}
     if (query.context_id)
       tags.push(`ctx:${query.context_id}`);
     try {
-      const result = await this.yamsJson(`list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset} ${this.sessionArg()}`);
+      const result = await this.yamsJson(`list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset}`);
       const tasks = [];
       for (const doc of result.documents || []) {
         const id = doc.name?.replace("tasks/", "").replace(".json", "");
@@ -612,10 +630,15 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
     } catch {}
   }
   async searchTasks(query, opts) {
-    const tags = opts?.type ? `task,${this.instanceTag()},type:${opts.type}` : `task,${this.instanceTag()}`;
+    const tagsParts = ["task"];
+    if (opts?.instance_id)
+      tagsParts.push(`inst:${opts.instance_id}`);
+    if (opts?.type)
+      tagsParts.push(`type:${opts.type}`);
+    const tags = tagsParts.join(",");
     const limit = opts?.limit || 10;
     try {
-      const result = await this.yamsJson(`search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`);
+      const result = await this.yamsJson(`search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit}`);
       const tasks = [];
       for (const r of result.results || []) {
         const id = r.path?.replace("tasks/", "").replace(".json", "");
@@ -631,10 +654,11 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
     }
   }
   async search(query, opts) {
-    const tags = this.instanceTag();
+    const tags = opts?.instance_id ? `inst:${opts.instance_id}` : "";
     const limit = opts?.limit || 20;
     try {
-      const result = await this.yamsJson(`search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} ${this.sessionArg()}`);
+      const tagArg = tags ? `--tags ${this.shellEscape(tags)} --match-all-tags ` : "";
+      const result = await this.yamsJson(`search ${this.shellEscape(query)} ${tagArg}--limit ${limit}`);
       const findings = [];
       const tasks = [];
       for (const r of result.results || []) {
@@ -661,10 +685,16 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
     }
   }
   async grep(pattern, opts) {
-    const tags = opts?.entity ? `${opts.entity},${this.instanceTag()}` : this.instanceTag();
+    const tagsParts = [];
+    if (opts?.entity)
+      tagsParts.push(opts.entity);
+    if (opts?.instance_id)
+      tagsParts.push(`inst:${opts.instance_id}`);
+    const tags = tagsParts.join(",");
     const limit = opts?.limit || 50;
     try {
-      const result = await this.yams(`grep ${this.shellEscape(pattern)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit} --json`);
+      const tagArg = tags ? `--tags ${this.shellEscape(tags)} --match-all-tags ` : "";
+      const result = await this.yams(`grep ${this.shellEscape(pattern)} ${tagArg}--limit ${limit} --json`);
       const parsed = JSON.parse(result);
       const entries = [];
       if (parsed.output) {
@@ -707,7 +737,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
     const tasks = await this.queryTasks({ limit: 1000, offset: 0 });
     let contextCount = 0;
     try {
-      const ctxResult = await this.yamsJson(`list --tags ${this.shellEscape(`context,${this.instanceTag()}`)} --match-all-tags --limit 1000`);
+      const ctxResult = await this.yamsJson(`list --tags context --limit 1000`);
       contextCount = ctxResult.documents?.length || 0;
     } catch {}
     const findingsByTopic = {};
@@ -1222,10 +1252,12 @@ Registered at: ${agent.registered_at}`;
         }
       }),
       bb_list_agents: tool({
-        description: "List all registered agents and their capabilities",
-        args: {},
-        async execute() {
-          const agents = await blackboard.listAgents();
+        description: "List all registered agents and their capabilities. Lists agents across all instances by default.",
+        args: {
+          instance_id: z2.string().optional().describe("Filter by specific instance ID (omit to list agents across all instances)")
+        },
+        async execute(args) {
+          const agents = await blackboard.listAgents({ instance_id: args.instance_id });
           if (agents.length === 0) {
             return "No agents registered yet.";
           }
@@ -1280,7 +1312,7 @@ ${finding.context_id ? `Context: ${finding.context_id}` : ""}`;
         }
       }),
       bb_query_findings: tool({
-        description: "Query findings from the blackboard by topic, agent, severity, or context. Use to discover what other agents have found.",
+        description: "Query findings from the blackboard by topic, agent, severity, or context. Use to discover what other agents have found. By default, searches across all instances/sessions.",
         args: {
           topic: FindingTopic.optional().describe("Filter by topic"),
           agent_id: z2.string().optional().describe("Filter by source agent"),
@@ -1289,6 +1321,7 @@ ${finding.context_id ? `Context: ${finding.context_id}` : ""}`;
           severity: z2.array(FindingSeverity).optional().describe("Filter by severity levels"),
           min_confidence: z2.number().min(0).max(1).optional().describe("Minimum confidence threshold"),
           scope: FindingScope.optional().describe("Filter by persistence scope"),
+          instance_id: z2.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z2.number().int().positive().optional().describe("Max results (default: 20)")
         },
         async execute(args) {
@@ -1309,15 +1342,17 @@ ${finding.context_id ? `Context: ${finding.context_id}` : ""}`;
         }
       }),
       bb_search_findings: tool({
-        description: "Search findings using natural language. Uses semantic search to find relevant findings.",
+        description: "Search findings using natural language. Uses semantic search to find relevant findings. Searches across all instances/sessions by default.",
         args: {
           query: z2.string().min(1).describe("Natural language search query"),
           topic: FindingTopic.optional().describe("Limit to specific topic"),
+          instance_id: z2.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z2.number().int().positive().optional().describe("Max results (default: 10)")
         },
         async execute(args) {
           const findings = await blackboard.searchFindings(args.query, {
             topic: args.topic,
+            instance_id: args.instance_id,
             limit: args.limit ?? 10
           });
           if (findings.length === 0) {
@@ -1443,39 +1478,52 @@ Status: ${task.status}`;
         }
       }),
       bb_update_task: tool({
-        description: "Update the status of a task you're working on",
+        description: "Update the status, findings, or artifacts of a task you're working on",
         args: {
           task_id: z2.string().min(1).describe("The task ID"),
-          status: TaskStatus.describe("New status: working, blocked, review"),
-          error: z2.string().optional().describe("Error message if blocked/failed")
+          status: TaskStatus.optional().describe("New status: working, blocked, review, completed"),
+          error: z2.string().optional().describe("Error message if blocked/failed"),
+          findings: z2.array(z2.string()).optional().describe("Finding IDs to associate with this task"),
+          artifacts: z2.array(ArtifactSchema).optional().describe("Artifacts produced by this task (files, data, reports)")
         },
         async execute(args) {
-          const task = await blackboard.updateTask(args.task_id, {
-            status: args.status,
-            error: args.error
-          });
+          const updates = {};
+          if (args.status)
+            updates.status = args.status;
+          if (args.error)
+            updates.error = args.error;
+          if (args.findings)
+            updates.findings = args.findings;
+          if (args.artifacts)
+            updates.artifacts = args.artifacts;
+          const task = await blackboard.updateTask(args.task_id, updates);
           if (!task) {
             return `Task not found: ${args.task_id}`;
           }
-          return `Task ${task.id} updated to status: ${task.status}`;
+          return `Task ${task.id} updated to status: ${task.status}${args.findings?.length ? `
+Associated findings: ${args.findings.join(", ")}` : ""}${args.artifacts?.length ? `
+Attached ${args.artifacts.length} artifact(s)` : ""}`;
         }
       }),
       bb_complete_task: tool({
         description: "Mark a task as completed, optionally with findings or artifacts",
         args: {
           task_id: z2.string().min(1).describe("The task ID"),
-          findings: z2.array(z2.string()).optional().describe("Finding IDs produced by this task")
+          findings: z2.array(z2.string()).optional().describe("Finding IDs produced by this task"),
+          artifacts: z2.array(ArtifactSchema).optional().describe("Artifacts produced by this task (files, data, reports)")
         },
         async execute(args) {
           const task = await blackboard.completeTask(args.task_id, {
-            findings: args.findings
+            findings: args.findings,
+            artifacts: args.artifacts
           });
           if (!task) {
             return `Task not found: ${args.task_id}`;
           }
           return `Task completed: ${task.id}
-Title: ${task.title}
-${args.findings?.length ? `Findings: ${args.findings.join(", ")}` : ""}`;
+Title: ${task.title}${args.findings?.length ? `
+Findings: ${args.findings.join(", ")}` : ""}${args.artifacts?.length ? `
+Artifacts: ${args.artifacts.map((a) => a.name).join(", ")}` : ""}`;
         }
       }),
       bb_fail_task: tool({
@@ -1494,7 +1542,7 @@ Error: ${args.error}`;
         }
       }),
       bb_query_tasks: tool({
-        description: "Query tasks by type, status, priority, or assignee",
+        description: "Query tasks by type, status, priority, or assignee. Searches across all instances/sessions by default.",
         args: {
           type: TaskType.optional().describe("Filter by task type"),
           status: TaskStatus.optional().describe("Filter by status"),
@@ -1502,6 +1550,7 @@ Error: ${args.error}`;
           created_by: z2.string().optional().describe("Filter by creator"),
           assigned_to: z2.string().optional().describe("Filter by assignee"),
           context_id: z2.string().optional().describe("Filter by context"),
+          instance_id: z2.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z2.number().int().positive().optional().describe("Max results")
         },
         async execute(args) {
@@ -1521,15 +1570,17 @@ Error: ${args.error}`;
         }
       }),
       bb_search_tasks: tool({
-        description: "Search tasks using natural language. Uses semantic search to find relevant tasks.",
+        description: "Search tasks using natural language. Uses semantic search to find relevant tasks. Searches across all instances/sessions by default.",
         args: {
           query: z2.string().min(1).describe("Natural language search query"),
           type: TaskType.optional().describe("Limit to specific task type"),
+          instance_id: z2.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z2.number().int().positive().optional().describe("Max results (default: 10)")
         },
         async execute(args) {
           const tasks = await blackboard.searchTasks(args.query, {
             type: args.type,
+            instance_id: args.instance_id,
             limit: args.limit ?? 10
           });
           if (tasks.length === 0) {
@@ -1543,13 +1594,15 @@ Error: ${args.error}`;
         }
       }),
       bb_search: tool({
-        description: "Unified semantic search across all blackboard entities (findings and tasks). Returns results classified by type.",
+        description: "Unified semantic search across all blackboard entities (findings and tasks). Returns results classified by type. Searches across all instances/sessions by default.",
         args: {
           query: z2.string().min(1).describe("Natural language search query"),
+          instance_id: z2.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z2.number().int().positive().optional().describe("Max results (default: 20)")
         },
         async execute(args) {
           const results = await blackboard.search(args.query, {
+            instance_id: args.instance_id,
             limit: args.limit ?? 20
           });
           const output = [];
@@ -1576,15 +1629,17 @@ Error: ${args.error}`;
         }
       }),
       bb_grep: tool({
-        description: "Search blackboard content using regex/pattern matching. Searches across finding and task content.",
+        description: "Search blackboard content using regex/pattern matching. Searches across finding and task content across all instances/sessions by default.",
         args: {
           pattern: z2.string().min(1).describe("Regex pattern to search for"),
           entity: z2.enum(["finding", "task"]).optional().describe("Limit to findings or tasks"),
+          instance_id: z2.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z2.number().int().positive().optional().describe("Max results (default: 50)")
         },
         async execute(args) {
           const results = await blackboard.grep(args.pattern, {
             entity: args.entity,
+            instance_id: args.instance_id,
             limit: args.limit ?? 50
           });
           if (results.length === 0) {

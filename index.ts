@@ -18,6 +18,7 @@ import {
   TaskStatus,
   TaskPriority,
   ReferenceSchema,
+  ArtifactSchema,
   SubscriptionPatternType,
   SubscriptionFiltersSchema,
 } from "./types"
@@ -98,10 +99,12 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
       }),
 
       bb_list_agents: tool({
-        description: "List all registered agents and their capabilities",
-        args: {},
-        async execute() {
-          const agents = await blackboard.listAgents()
+        description: "List all registered agents and their capabilities. Lists agents across all instances by default.",
+        args: {
+          instance_id: z.string().optional().describe("Filter by specific instance ID (omit to list agents across all instances)"),
+        },
+        async execute(args) {
+          const agents = await blackboard.listAgents({ instance_id: args.instance_id })
           if (agents.length === 0) {
             return "No agents registered yet."
           }
@@ -182,7 +185,7 @@ ${finding.context_id ? `Context: ${finding.context_id}` : ""}`
 
       bb_query_findings: tool({
         description:
-          "Query findings from the blackboard by topic, agent, severity, or context. Use to discover what other agents have found.",
+          "Query findings from the blackboard by topic, agent, severity, or context. Use to discover what other agents have found. By default, searches across all instances/sessions.",
         args: {
           topic: FindingTopic.optional().describe("Filter by topic"),
           agent_id: z.string().optional().describe("Filter by source agent"),
@@ -191,6 +194,7 @@ ${finding.context_id ? `Context: ${finding.context_id}` : ""}`
           severity: z.array(FindingSeverity).optional().describe("Filter by severity levels"),
           min_confidence: z.number().min(0).max(1).optional().describe("Minimum confidence threshold"),
           scope: FindingScope.optional().describe("Filter by persistence scope"),
+          instance_id: z.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z.number().int().positive().optional().describe("Max results (default: 20)"),
         },
         async execute(args) {
@@ -218,15 +222,17 @@ ${finding.context_id ? `Context: ${finding.context_id}` : ""}`
 
       bb_search_findings: tool({
         description:
-          "Search findings using natural language. Uses semantic search to find relevant findings.",
+          "Search findings using natural language. Uses semantic search to find relevant findings. Searches across all instances/sessions by default.",
         args: {
           query: z.string().min(1).describe("Natural language search query"),
           topic: FindingTopic.optional().describe("Limit to specific topic"),
+          instance_id: z.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z.number().int().positive().optional().describe("Max results (default: 10)"),
         },
         async execute(args) {
           const findings = await blackboard.searchFindings(args.query, {
             topic: args.topic,
+            instance_id: args.instance_id,
             limit: args.limit ?? 10,
           })
 
@@ -379,21 +385,26 @@ Status: ${task.status}`
       }),
 
       bb_update_task: tool({
-        description: "Update the status of a task you're working on",
+        description: "Update the status, findings, or artifacts of a task you're working on",
         args: {
           task_id: z.string().min(1).describe("The task ID"),
-          status: TaskStatus.describe("New status: working, blocked, review"),
+          status: TaskStatus.optional().describe("New status: working, blocked, review, completed"),
           error: z.string().optional().describe("Error message if blocked/failed"),
+          findings: z.array(z.string()).optional().describe("Finding IDs to associate with this task"),
+          artifacts: z.array(ArtifactSchema).optional().describe("Artifacts produced by this task (files, data, reports)"),
         },
         async execute(args) {
-          const task = await blackboard.updateTask(args.task_id, {
-            status: args.status,
-            error: args.error,
-          })
+          const updates: Partial<{ status: any; error: string; findings: string[]; artifacts: any[] }> = {}
+          if (args.status) updates.status = args.status
+          if (args.error) updates.error = args.error
+          if (args.findings) updates.findings = args.findings
+          if (args.artifacts) updates.artifacts = args.artifacts
+          
+          const task = await blackboard.updateTask(args.task_id, updates)
           if (!task) {
             return `Task not found: ${args.task_id}`
           }
-          return `Task ${task.id} updated to status: ${task.status}`
+          return `Task ${task.id} updated to status: ${task.status}${args.findings?.length ? `\nAssociated findings: ${args.findings.join(", ")}` : ""}${args.artifacts?.length ? `\nAttached ${args.artifacts.length} artifact(s)` : ""}`
         },
       }),
 
@@ -402,17 +413,18 @@ Status: ${task.status}`
         args: {
           task_id: z.string().min(1).describe("The task ID"),
           findings: z.array(z.string()).optional().describe("Finding IDs produced by this task"),
+          artifacts: z.array(ArtifactSchema).optional().describe("Artifacts produced by this task (files, data, reports)"),
         },
         async execute(args) {
           const task = await blackboard.completeTask(args.task_id, {
             findings: args.findings,
+            artifacts: args.artifacts,
           })
           if (!task) {
             return `Task not found: ${args.task_id}`
           }
           return `Task completed: ${task.id}
-Title: ${task.title}
-${args.findings?.length ? `Findings: ${args.findings.join(", ")}` : ""}`
+Title: ${task.title}${args.findings?.length ? `\nFindings: ${args.findings.join(", ")}` : ""}${args.artifacts?.length ? `\nArtifacts: ${args.artifacts.map(a => a.name).join(", ")}` : ""}`
         },
       }),
 
@@ -433,7 +445,7 @@ Error: ${args.error}`
       }),
 
       bb_query_tasks: tool({
-        description: "Query tasks by type, status, priority, or assignee",
+        description: "Query tasks by type, status, priority, or assignee. Searches across all instances/sessions by default.",
         args: {
           type: TaskType.optional().describe("Filter by task type"),
           status: TaskStatus.optional().describe("Filter by status"),
@@ -441,6 +453,7 @@ Error: ${args.error}`
           created_by: z.string().optional().describe("Filter by creator"),
           assigned_to: z.string().optional().describe("Filter by assignee"),
           context_id: z.string().optional().describe("Filter by context"),
+          instance_id: z.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z.number().int().positive().optional().describe("Max results"),
         },
         async execute(args) {
@@ -471,15 +484,17 @@ Error: ${args.error}`
 
       bb_search_tasks: tool({
         description:
-          "Search tasks using natural language. Uses semantic search to find relevant tasks.",
+          "Search tasks using natural language. Uses semantic search to find relevant tasks. Searches across all instances/sessions by default.",
         args: {
           query: z.string().min(1).describe("Natural language search query"),
           type: TaskType.optional().describe("Limit to specific task type"),
+          instance_id: z.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z.number().int().positive().optional().describe("Max results (default: 10)"),
         },
         async execute(args) {
           const tasks = await blackboard.searchTasks(args.query, {
             type: args.type,
+            instance_id: args.instance_id,
             limit: args.limit ?? 10,
           })
 
@@ -500,13 +515,15 @@ Error: ${args.error}`
 
       bb_search: tool({
         description:
-          "Unified semantic search across all blackboard entities (findings and tasks). Returns results classified by type.",
+          "Unified semantic search across all blackboard entities (findings and tasks). Returns results classified by type. Searches across all instances/sessions by default.",
         args: {
           query: z.string().min(1).describe("Natural language search query"),
+          instance_id: z.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z.number().int().positive().optional().describe("Max results (default: 20)"),
         },
         async execute(args) {
           const results = await blackboard.search(args.query, {
+            instance_id: args.instance_id,
             limit: args.limit ?? 20,
           })
 
@@ -548,15 +565,17 @@ Error: ${args.error}`
 
       bb_grep: tool({
         description:
-          "Search blackboard content using regex/pattern matching. Searches across finding and task content.",
+          "Search blackboard content using regex/pattern matching. Searches across finding and task content across all instances/sessions by default.",
         args: {
           pattern: z.string().min(1).describe("Regex pattern to search for"),
           entity: z.enum(["finding", "task"]).optional().describe("Limit to findings or tasks"),
+          instance_id: z.string().optional().describe("Filter by specific instance ID (omit to search across all instances)"),
           limit: z.number().int().positive().optional().describe("Max results (default: 50)"),
         },
         async execute(args) {
           const results = await blackboard.grep(args.pattern, {
             entity: args.entity,
+            instance_id: args.instance_id,
             limit: args.limit ?? 50,
           })
 
