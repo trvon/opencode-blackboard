@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/trvon/opencode-blackboard/compare/v1.6.0...v1.7.0) (2026-02-11)
+
+
+### Features
+
+* **blackboard:** enable cross-session discovery with auto-reconciliation ([95ca30a](https://github.com/trvon/opencode-blackboard/commit/95ca30a7a81d679e0f92a1a3ffef48bf1b6da705))
+
 ## [1.6.0](https://github.com/trvon/opencode-blackboard/compare/v1.5.0...v1.6.0) (2026-02-05)
 
 
