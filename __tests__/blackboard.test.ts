@@ -326,7 +326,7 @@ Found SQL injection vulnerability`
       expect(updateCmd).toContain("resolved_at=")
     })
 
-    test("searchFindings constructs search command with tag filters", async () => {
+    test("searchFindings constructs search command without instance filter by default", async () => {
       const { $, calls } = createMockShell({
         search: () => ({ stdout: Buffer.from(JSON.stringify({ results: [] })) }),
       })
@@ -336,7 +336,23 @@ Found SQL injection vulnerability`
 
       const searchCmd = calls.find(c => c.includes("search"))
       expect(searchCmd).toContain("SQL injection")
-      expect(searchCmd).toMatch(/finding,inst:[0-9a-f-]+,topic:security/)
+      expect(searchCmd).toContain("finding,topic:security")
+      expect(searchCmd).not.toMatch(/finding,inst:/)
+      expect(searchCmd).toContain("--match-all-tags")
+      expect(searchCmd).toContain("--limit 5")
+    })
+
+    test("searchFindings includes instance filter when instance_id is provided", async () => {
+      const { $, calls } = createMockShell({
+        search: () => ({ stdout: Buffer.from(JSON.stringify({ results: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.searchFindings("SQL injection", { topic: "security", limit: 5, instance_id: "test-instance-123" })
+
+      const searchCmd = calls.find(c => c.includes("search"))
+      expect(searchCmd).toContain("SQL injection")
+      expect(searchCmd).toContain("finding,inst:test-instance-123,topic:security")
       expect(searchCmd).toContain("--match-all-tags")
       expect(searchCmd).toContain("--limit 5")
     })
@@ -464,7 +480,7 @@ Found SQL injection vulnerability`
       expect(listCmd).toContain("assignee:agent-a")
     })
 
-    test("session arg is passed when session is set", async () => {
+    test("session arg is not passed in reads even when session is set", async () => {
       const { $, calls } = createMockShell({
         list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
       })
@@ -473,10 +489,23 @@ Found SQL injection vulnerability`
       await bb.queryFindings({ limit: 10, offset: 0 })
 
       const listCmd = calls.find(c => c.includes("list"))
-      expect(listCmd).toContain("--session 'my-session'")
+      // Session filtering removed from reads to enable cross-session discovery
+      expect(listCmd).not.toContain("--session")
     })
 
-    test("session arg is absent when session is not set", async () => {
+    test("instance_id filter is applied when provided", async () => {
+      const { $, calls } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+
+      const bb = new YamsBlackboard($)
+      await bb.queryFindings({ instance_id: "test-inst-123", limit: 10, offset: 0 })
+
+      const listCmd = calls.find(c => c.includes("list"))
+      expect(listCmd).toContain("inst:test-inst-123")
+    })
+
+    test("instance tag is not included when instance_id is not provided", async () => {
       const { $, calls } = createMockShell({
         list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
       })
@@ -485,7 +514,7 @@ Found SQL injection vulnerability`
       await bb.queryFindings({ limit: 10, offset: 0 })
 
       const listCmd = calls.find(c => c.includes("list"))
-      expect(listCmd).not.toContain("--session")
+      expect(listCmd).not.toMatch(/inst:[0-9a-f-]+/)
     })
   })
 
@@ -536,14 +565,14 @@ Found SQL injection vulnerability`
 
       const { $ } = createMockShell({
         "list": (cmd: string) => {
-          // Tags parameter contains comma-separated values like "finding,inst:xxx" or "task,inst:xxx"
-          if (cmd.includes("--tags") && cmd.includes("'finding,")) {
+          // Tags parameter now uses just "finding" or "task" without instance filter by default
+          if (cmd.includes("--tags") && cmd.includes("finding") && !cmd.includes("task")) {
             return { stdout: Buffer.from(JSON.stringify({ documents: [{ name: "findings/security/f-1.md" }] })) }
           }
-          if (cmd.includes("--tags") && cmd.includes("'task,")) {
+          if (cmd.includes("--tags") && cmd.includes("task")) {
             return { stdout: Buffer.from(JSON.stringify({ documents: [{ name: "tasks/t-1.json" }] })) }
           }
-          if (cmd.includes("--tags") && cmd.includes("'agent,")) {
+          if (cmd.includes("--tags") && cmd.includes("agent")) {
             return { stdout: Buffer.from(JSON.stringify({ documents: [] })) }
           }
           return { stdout: Buffer.from(JSON.stringify({ documents: [] })) }
