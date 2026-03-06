@@ -44,6 +44,20 @@ export class YamsBlackboard {
   private sessionName?: string
   private sessionActive = false
   readonly instanceId: string
+  private readonly hydrationConcurrency = 6
+  private readonly contentCacheTtlMs = 30_000
+  private readonly contentCacheMaxEntries = 2048
+  private readonly activeSubscriptionCacheTtlMs = 2_000
+  private readonly contentCache = new Map<string, {
+    content: string
+    hash?: string
+    expiresAt: number
+  }>()
+  private readonly inFlightContent = new Map<string, Promise<string>>()
+  private activeSubscriptionsCache?: {
+    subscriptions: Subscription[]
+    expiresAt: number
+  }
 
   constructor(
     private $: Shell,
@@ -141,7 +155,143 @@ export class YamsBlackboard {
   private async yamsStore(content: string, name: string, tags: string, extraArgs: string = ""): Promise<string> {
     const escaped = this.shellEscape(content)
     const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} --metadata owner=opencode ${extraArgs}`
-    return this.shell(cmd)
+    const output = await this.shell(cmd)
+    this.putCachedContent(name, content)
+    return output
+  }
+
+  private getCachedContent(name: string, expectedHash?: string): string | null {
+    const entry = this.contentCache.get(name)
+    if (!entry) {
+      return null
+    }
+    if (entry.expiresAt < Date.now()) {
+      this.contentCache.delete(name)
+      return null
+    }
+    if (expectedHash && entry.hash && entry.hash !== expectedHash) {
+      this.contentCache.delete(name)
+      return null
+    }
+    return entry.content
+  }
+
+  private putCachedContent(name: string, content: string, hash?: string): void {
+    this.contentCache.set(name, {
+      content,
+      hash,
+      expiresAt: Date.now() + this.contentCacheTtlMs,
+    })
+    while (this.contentCache.size > this.contentCacheMaxEntries) {
+      const oldest = this.contentCache.keys().next().value
+      if (!oldest) {
+        break
+      }
+      this.contentCache.delete(oldest)
+    }
+  }
+
+  private async catByName(name: string, expectedHash?: string): Promise<string> {
+    const cached = this.getCachedContent(name, expectedHash)
+    if (cached !== null) {
+      return cached
+    }
+
+    const inFlightKey = `${name}:${expectedHash || ""}`
+    const existing = this.inFlightContent.get(inFlightKey)
+    if (existing) {
+      return existing
+    }
+
+    const op = this.yams(`cat ${this.shellEscape(name)}`)
+      .then(content => {
+        this.putCachedContent(name, content, expectedHash)
+        return content
+      })
+      .finally(() => {
+        this.inFlightContent.delete(inFlightKey)
+      })
+    this.inFlightContent.set(inFlightKey, op)
+    return op
+  }
+
+  private tryJsonParse<T>(content: string): T | null {
+    try {
+      return JSON.parse(content) as T
+    } catch {
+      return null
+    }
+  }
+
+  private parseFindingMarkdown(content: string): Finding | null {
+    const match = content.match(/^---\n([\s\S]*?)\n---\n\n# (.*?)\n\n([\s\S]*)$/)
+    if (!match) {
+      return null
+    }
+
+    const frontmatter: Record<string, any> = {}
+    match[1].split("\n").forEach(line => {
+      const [key, ...rest] = line.split(": ")
+      if (key && rest.length) {
+        try {
+          frontmatter[key] = JSON.parse(rest.join(": "))
+        } catch {
+          frontmatter[key] = rest.join(": ")
+        }
+      }
+    })
+
+    return {
+      ...frontmatter,
+      title: match[2],
+      content: match[3].trim(),
+    } as Finding
+  }
+
+  private async mapLimit<T, U>(
+    items: T[],
+    limit: number,
+    fn: (item: T, index: number) => Promise<U>
+  ): Promise<U[]> {
+    if (items.length === 0) {
+      return []
+    }
+    const concurrency = Math.max(1, Math.min(limit, items.length))
+    const out: U[] = new Array(items.length)
+    let index = 0
+    const worker = async () => {
+      while (true) {
+        const current = index
+        index += 1
+        if (current >= items.length) {
+          return
+        }
+        out[current] = await fn(items[current], current)
+      }
+    }
+    await Promise.all(Array.from({ length: concurrency }, () => worker()))
+    return out
+  }
+
+  private async hydrateDocuments<T>(
+    docs: any[] | undefined,
+    parser: (content: string, doc: any) => T | null
+  ): Promise<T[]> {
+    const entries = Array.isArray(docs) ? docs : []
+    const hydrated = await this.mapLimit(entries, this.hydrationConcurrency, async (doc) => {
+      const name = typeof doc?.name === "string" ? doc.name : ""
+      if (!name) {
+        return null
+      }
+      const hash = typeof doc?.hash === "string" ? doc.hash : undefined
+      try {
+        const content = await this.catByName(name, hash)
+        return parser(content, doc)
+      } catch {
+        return null
+      }
+    })
+    return hydrated.filter((v): v is T => v !== null)
   }
 
   // ===========================================================================
@@ -207,8 +357,8 @@ export class YamsBlackboard {
 
   async getAgent(agentId: string): Promise<AgentCard | null> {
     try {
-      const result = await this.yams(`cat ${this.shellEscape(`agents/${agentId}.json`)}`)
-      return JSON.parse(result)
+      const result = await this.catByName(`agents/${agentId}.json`)
+      return this.tryJsonParse<AgentCard>(result)
     } catch {
       return null
     }
@@ -219,14 +369,9 @@ export class YamsBlackboard {
       const tags = opts?.instance_id ? `agent,inst:${opts.instance_id}` : "agent"
       const matchAll = opts?.instance_id ? "--match-all-tags " : ""
       const result = await this.yamsJson<{ documents: any[] }>(`list --tags ${this.shellEscape(tags)} ${matchAll}--limit 100`)
-      const agents: AgentCard[] = []
-      for (const doc of result.documents || []) {
-        try {
-          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
-          agents.push(JSON.parse(content))
-        } catch { /* skip malformed */ }
-      }
-      return agents
+      return this.hydrateDocuments<AgentCard>(result.documents, (content) =>
+        this.tryJsonParse<AgentCard>(content)
+      )
     } catch {
       return []
     }
@@ -329,27 +474,14 @@ ${finding.content}
     try {
       // Search by ID in the findings directory
       const result = await this.yams(`cat ${this.shellEscape(`findings/**/${findingId}.md`)}`)
-      // Parse frontmatter
-      const match = result.match(/^---\n([\s\S]*?)\n---\n\n# (.*?)\n\n([\s\S]*)$/)
-      if (!match) return null
-
-      const frontmatter: Record<string, any> = {}
-      match[1].split("\n").forEach(line => {
-        const [key, ...rest] = line.split(": ")
-        if (key && rest.length) {
-          try {
-            frontmatter[key] = JSON.parse(rest.join(": "))
-          } catch {
-            frontmatter[key] = rest.join(": ")
-          }
-        }
-      })
-
-      return {
-        ...frontmatter,
-        title: match[2],
-        content: match[3].trim(),
-      } as Finding
+      const parsed = this.parseFindingMarkdown(result)
+      if (!parsed) {
+        return null
+      }
+      if (parsed.id) {
+        this.putCachedContent(`findings/${parsed.topic}/${parsed.id}.md`, result)
+      }
+      return parsed
     } catch {
       return null
     }
@@ -369,19 +501,13 @@ ${finding.content}
       const result = await this.yamsJson<{ documents: any[] }>(
         `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset}`
       )
-
-      const findings: Finding[] = []
-      for (const doc of result.documents || []) {
-        const id = doc.name?.split("/").pop()?.replace(".md", "")
-        if (!id) continue
-        const finding = await this.getFinding(id)
-        if (finding) {
-          // Apply confidence filter
-          if (query.min_confidence && finding.confidence < query.min_confidence) continue
-          findings.push(finding)
-        }
+      const findings = await this.hydrateDocuments<Finding>(result.documents, (content) =>
+        this.parseFindingMarkdown(content)
+      )
+      if (!query.min_confidence) {
+        return findings
       }
-      return findings
+      return findings.filter(f => f.confidence >= query.min_confidence!)
     } catch {
       return []
     }
@@ -398,16 +524,20 @@ ${finding.content}
       const result = await this.yamsJson<{ results: any[] }>(
         `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit}`
       )
-
-      const findings: Finding[] = []
-      for (const r of result.results || []) {
-        const id = r.path?.split("/").pop()?.replace(".md", "")
-        if (id) {
-          const finding = await this.getFinding(id)
-          if (finding) findings.push(finding)
+      const hits = Array.isArray(result.results) ? result.results : []
+      const findings = await this.mapLimit(hits, this.hydrationConcurrency, async (r) => {
+        const path = typeof r?.path === "string" ? r.path : ""
+        if (!path) {
+          return null
         }
-      }
-      return findings
+        try {
+          const content = await this.catByName(path)
+          return this.parseFindingMarkdown(content)
+        } catch {
+          return null
+        }
+      })
+      return findings.filter((f): f is Finding => f !== null)
     } catch {
       return []
     }
@@ -511,8 +641,8 @@ ${finding.content}
 
   async getTask(taskId: string): Promise<Task | null> {
     try {
-      const result = await this.yams(`cat ${this.shellEscape(`tasks/${taskId}.json`)}`)
-      return JSON.parse(result)
+      const result = await this.catByName(`tasks/${taskId}.json`)
+      return this.tryJsonParse<Task>(result)
     } catch {
       return null
     }
@@ -532,15 +662,7 @@ ${finding.content}
       const result = await this.yamsJson<{ documents: any[] }>(
         `list --tags ${this.shellEscape(tags.join(","))} --match-all-tags --limit ${query.limit} --offset ${query.offset}`
       )
-
-      const tasks: Task[] = []
-      for (const doc of result.documents || []) {
-        const id = doc.name?.replace("tasks/", "").replace(".json", "")
-        if (!id) continue
-        const task = await this.getTask(id)
-        if (task) tasks.push(task)
-      }
-      return tasks
+      return this.hydrateDocuments<Task>(result.documents, (content) => this.tryJsonParse<Task>(content))
     } catch {
       return []
     }
@@ -674,8 +796,8 @@ ${finding.content}
 
   async getContext(contextId: string): Promise<Context | null> {
     try {
-      const result = await this.yams(`cat ${this.shellEscape(`contexts/${contextId}.json`)}`)
-      return JSON.parse(result)
+      const result = await this.catByName(`contexts/${contextId}.json`)
+      return this.tryJsonParse<Context>(result)
     } catch {
       return null
     }
@@ -793,8 +915,8 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
    */
   async getCompactionManifest(contextId: string): Promise<CompactionManifest | null> {
     try {
-      const result = await this.yams(`cat ${this.shellEscape(`contexts/${contextId}/compaction-manifest.json`)}`)
-      return JSON.parse(result)
+      const result = await this.catByName(`contexts/${contextId}/compaction-manifest.json`)
+      return this.tryJsonParse<CompactionManifest>(result)
     } catch {
       return null
     }
@@ -874,16 +996,20 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       const result = await this.yamsJson<{ results: any[] }>(
         `search ${this.shellEscape(query)} --tags ${this.shellEscape(tags)} --match-all-tags --limit ${limit}`
       )
-
-      const tasks: Task[] = []
-      for (const r of result.results || []) {
-        const id = r.path?.replace("tasks/", "").replace(".json", "")
-        if (id) {
-          const task = await this.getTask(id)
-          if (task) tasks.push(task)
+      const hits = Array.isArray(result.results) ? result.results : []
+      const tasks = await this.mapLimit(hits, this.hydrationConcurrency, async (r) => {
+        const path = typeof r?.path === "string" ? r.path : ""
+        if (!path || !path.startsWith("tasks/")) {
+          return null
         }
-      }
-      return tasks
+        try {
+          const content = await this.catByName(path)
+          return this.tryJsonParse<Task>(content)
+        } catch {
+          return null
+        }
+      })
+      return tasks.filter((t): t is Task => t !== null)
     } catch {
       return []
     }
@@ -898,26 +1024,49 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       const result = await this.yamsJson<{ results: any[] }>(
         `search ${this.shellEscape(query)} ${tagArg}--limit ${limit}`
       )
-
-      const findings: Finding[] = []
-      const tasks: Task[] = []
-
-      for (const r of result.results || []) {
-        const path = r.path || ""
+      const hits = Array.isArray(result.results) ? result.results : []
+      const hydrated = await this.mapLimit(hits, this.hydrationConcurrency, async (r) => {
+        const path = typeof r?.path === "string" ? r.path : ""
+        if (!path) {
+          return null
+        }
         if (path.startsWith("findings/")) {
-          const id = path.split("/").pop()?.replace(".md", "")
-          if (id) {
-            const finding = await this.getFinding(id)
-            if (finding) findings.push(finding)
-          }
-        } else if (path.startsWith("tasks/")) {
-          const id = path.replace("tasks/", "").replace(".json", "")
-          if (id) {
-            const task = await this.getTask(id)
-            if (task) tasks.push(task)
+          try {
+            const content = await this.catByName(path)
+            const finding = this.parseFindingMarkdown(content)
+            if (!finding) {
+              return null
+            }
+            return { kind: "finding" as const, finding }
+          } catch {
+            return null
           }
         }
-      }
+        if (path.startsWith("tasks/")) {
+          try {
+            const content = await this.catByName(path)
+            const task = this.tryJsonParse<Task>(content)
+            if (!task) {
+              return null
+            }
+            return { kind: "task" as const, task }
+          } catch {
+            return null
+          }
+        }
+        return null
+      })
+
+      const findings = hydrated
+        .filter((entry): entry is { kind: "finding"; finding: Finding } =>
+          entry !== null && entry.kind === "finding"
+        )
+        .map(entry => entry.finding)
+      const tasks = hydrated
+        .filter((entry): entry is { kind: "task"; task: Task } =>
+          entry !== null && entry.kind === "task"
+        )
+        .map(entry => entry.task)
 
       return { findings, tasks }
     } catch {
@@ -1072,16 +1221,15 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       tags,
       this.sessionArg()
     )
+    this.activeSubscriptionsCache = undefined
 
     return subscription
   }
 
   async getSubscription(subscriberId: string, subscriptionId: string): Promise<Subscription | null> {
     try {
-      const result = await this.yams(
-        `cat ${this.shellEscape(`subscriptions/${subscriberId}/${subscriptionId}.json`)}`
-      )
-      return JSON.parse(result)
+      const result = await this.catByName(`subscriptions/${subscriberId}/${subscriptionId}.json`)
+      return this.tryJsonParse<Subscription>(result)
     } catch {
       return null
     }
@@ -1092,22 +1240,18 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       const result = await this.yamsJson<{ documents: any[] }>(
         `list --tags ${this.shellEscape(`subscription,${this.instanceTag()},subscriber:${subscriberId}`)} --match-all-tags --limit 100`
       )
-
-      const subscriptions: Subscription[] = []
-      for (const doc of result.documents || []) {
-        try {
-          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
-          const sub = JSON.parse(content)
-          // Filter out expired subscriptions
-          if (sub.expires_at && new Date(sub.expires_at) < new Date()) {
-            continue
-          }
-          if (sub.status === "active") {
-            subscriptions.push(sub)
-          }
-        } catch { /* skip malformed */ }
-      }
-      return subscriptions
+      const subscriptions = await this.hydrateDocuments<Subscription>(result.documents, (content) =>
+        this.tryJsonParse<Subscription>(content)
+      )
+      return subscriptions.filter((sub) => {
+        if (!sub || sub.status !== "active") {
+          return false
+        }
+        if (sub.expires_at && new Date(sub.expires_at) < new Date()) {
+          return false
+        }
+        return true
+      })
     } catch {
       return []
     }
@@ -1133,6 +1277,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
         `subscriptions/${subscriberId}/${subscriptionId}.json`,
         tags
       )
+      this.activeSubscriptionsCache = undefined
       return true
     } catch {
       return false
@@ -1142,23 +1287,69 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
   async findMatchingSubscriptions(event: BlackboardEvent): Promise<Subscription[]> {
     const matching: Subscription[] = []
 
+    const now = Date.now()
+    if (this.activeSubscriptionsCache && this.activeSubscriptionsCache.expiresAt > now) {
+      return this.activeSubscriptionsCache.subscriptions.filter((sub) => {
+        if (sub.filters?.exclude_self !== false && sub.subscriber_id === event.source_agent_id) {
+          return false
+        }
+        let matches = false
+        switch (sub.pattern_type) {
+          case "topic":
+            matches = event.topic === sub.pattern_value
+            break
+          case "agent":
+            matches = event.source_agent_id === sub.pattern_value
+            break
+          case "status":
+            matches = event.status === sub.pattern_value
+            break
+          case "context":
+            matches = event.context_id === sub.pattern_value
+            break
+          case "entity":
+            matches = event.source_type === sub.pattern_value
+            break
+        }
+        if (!matches) {
+          return false
+        }
+        if (sub.filters?.severity?.length && event.severity) {
+          return sub.filters.severity.includes(event.severity)
+        }
+        return true
+      })
+    }
+
     // Query active subscriptions
     try {
       const result = await this.yamsJson<{ documents: any[] }>(
         `list --tags ${this.shellEscape(`subscription,${this.instanceTag()},status:active`)} --match-all-tags --limit 500`
       )
 
-      for (const doc of result.documents || []) {
+      const subscriptions = await this.hydrateDocuments<Subscription>(result.documents, (content) =>
+        this.tryJsonParse<Subscription>(content)
+      )
+
+      const activeSubscriptions = subscriptions.filter((sub) => {
+        if (!sub || sub.status !== "active") {
+          return false
+        }
+        if (sub.expires_at && new Date(sub.expires_at) < new Date()) {
+          return false
+        }
+        return true
+      })
+
+      this.activeSubscriptionsCache = {
+        subscriptions: activeSubscriptions,
+        expiresAt: now + this.activeSubscriptionCacheTtlMs,
+      }
+
+      for (const sub of activeSubscriptions) {
         try {
-          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
-          const sub: Subscription = JSON.parse(content)
 
           // Check expiration
-          if (sub.expires_at && new Date(sub.expires_at) < new Date()) {
-            continue
-          }
-
-          // Check exclude_self filter
           if (sub.filters?.exclude_self !== false && sub.subscriber_id === event.source_agent_id) {
             continue
           }
@@ -1253,13 +1444,10 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
         `list --tags ${this.shellEscape(`notification,${this.instanceTag()},recipient:${recipientId},status:unread`)} --match-all-tags --limit ${limit}`
       )
 
-      const notifications: Notification[] = []
-      for (const doc of result.documents || []) {
-        try {
-          const content = await this.yams(`cat ${this.shellEscape(doc.name)}`)
-          notifications.push(JSON.parse(content))
-        } catch { /* skip malformed */ }
-      }
+      const notifications = await this.hydrateDocuments<Notification>(
+        result.documents,
+        (content) => this.tryJsonParse<Notification>(content)
+      )
 
       // Sort by created_at descending (newest first)
       return notifications.sort((a, b) =>
@@ -1273,8 +1461,11 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
   async markNotificationRead(recipientId: string, notificationId: string): Promise<boolean> {
     try {
       const path = `notifications/${recipientId}/${notificationId}.json`
-      const content = await this.yams(`cat ${this.shellEscape(path)}`)
-      const notification: Notification = JSON.parse(content)
+      const content = await this.catByName(path)
+      const notification = this.tryJsonParse<Notification>(content)
+      if (!notification) {
+        return false
+      }
 
       notification.status = "read"
       notification.read_at = this.nowISO()
@@ -1310,8 +1501,11 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
   async dismissNotification(recipientId: string, notificationId: string): Promise<boolean> {
     try {
       const path = `notifications/${recipientId}/${notificationId}.json`
-      const content = await this.yams(`cat ${this.shellEscape(path)}`)
-      const notification: Notification = JSON.parse(content)
+      const content = await this.catByName(path)
+      const notification = this.tryJsonParse<Notification>(content)
+      if (!notification) {
+        return false
+      }
 
       notification.status = "dismissed"
 
