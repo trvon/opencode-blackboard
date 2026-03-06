@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/trvon/opencode-blackboard/compare/v1.7.0...v1.7.1) (2026-03-06)
+
+
+### Bug Fixes
+
+* updates to reduce communication churn ([1c83b70](https://github.com/trvon/opencode-blackboard/commit/1c83b704c5cb02bf81239086ed9244e559053e0c))
+
 ## [1.7.0](https://github.com/trvon/opencode-blackboard/compare/v1.6.0...v1.7.0) (2026-02-11)
 
 
