@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/trvon/opencode-blackboard/compare/v1.7.1...v1.7.2) (2026-03-21)
+
+
+### Bug Fixes
+
+* fixing register logic to reduce unnessary errors when adding files to session ([a925eef](https://github.com/trvon/opencode-blackboard/commit/a925eef5ea3932f17206def78bd6490f5bb308a8))
+
 ## [1.7.1](https://github.com/trvon/opencode-blackboard/compare/v1.7.0...v1.7.1) (2026-03-06)
 
 
