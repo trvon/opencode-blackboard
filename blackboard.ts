@@ -87,10 +87,6 @@ export class YamsBlackboard {
     return new Date().toISOString()
   }
 
-  private sessionArg(): string {
-    return this.sessionName ? `--session ${this.shellEscape(this.sessionName)}` : ""
-  }
-
   // Shell escape a string for safe inclusion in shell commands
   private shellEscape(s: string): string {
     return `'${s.replace(/'/g, "'\\''")}'`
@@ -152,9 +148,9 @@ export class YamsBlackboard {
   }
 
   // Store content via yams add with piping
-  private async yamsStore(content: string, name: string, tags: string, extraArgs: string = ""): Promise<string> {
+  private async yamsStore(content: string, name: string, tags: string): Promise<string> {
     const escaped = this.shellEscape(content)
-    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} --metadata owner=opencode ${extraArgs}`
+    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} --metadata owner=opencode`
     const output = await this.shell(cmd)
     this.putCachedContent(name, content)
     return output
@@ -350,7 +346,7 @@ export class YamsBlackboard {
       ...agent.capabilities.map(c => `capability:${c}`),
     ].join(",")
 
-    await this.yamsStore(content, `agents/${agent.id}.json`, tags, this.sessionArg())
+    await this.yamsStore(content, `agents/${agent.id}.json`, tags)
 
     return full
   }
@@ -449,7 +445,7 @@ ${finding.content}
     const tags = this.buildFindingTags(finding)
     const name = `findings/${finding.topic}/${id}.md`
 
-    await this.yamsStore(md, name, tags, this.sessionArg())
+    await this.yamsStore(md, name, tags)
 
     // Auto-reconcile to global corpus for cross-session discovery
     await this.reconcile()
@@ -620,7 +616,7 @@ ${finding.content}
     const content = JSON.stringify(task, null, 2)
     const tags = this.buildTaskTags(task)
 
-    await this.yamsStore(content, `tasks/${id}.json`, tags, this.sessionArg())
+    await this.yamsStore(content, `tasks/${id}.json`, tags)
 
     // Auto-reconcile to global corpus for cross-session discovery
     await this.reconcile()
@@ -897,8 +893,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       await this.yamsStore(
         JSON.stringify(manifest),
         `contexts/${contextId}/compaction-manifest.json`,
-        `manifest,ctx:${contextId},scope:persistent`,
-        ""
+        `manifest,ctx:${contextId},scope:persistent`
       )
     } catch {
       // Silent failure - don't break compaction if storage fails
@@ -1215,12 +1210,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       "status:active",
     ].join(",")
 
-    await this.yamsStore(
-      content,
-      `subscriptions/${subscription.subscriber_id}/${id}.json`,
-      tags,
-      this.sessionArg()
-    )
+    await this.yamsStore(content, `subscriptions/${subscription.subscriber_id}/${id}.json`, tags)
     this.activeSubscriptionsCache = undefined
 
     return subscription
@@ -1428,12 +1418,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       "status:unread",
     ].join(",")
 
-    await this.yamsStore(
-      content,
-      `notifications/${notification.recipient_id}/${id}.json`,
-      tags,
-      this.sessionArg()
-    )
+    await this.yamsStore(content, `notifications/${notification.recipient_id}/${id}.json`, tags)
 
     return notification
   }

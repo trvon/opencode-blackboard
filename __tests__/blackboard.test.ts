@@ -493,6 +493,22 @@ Found SQL injection vulnerability`
       expect(listCmd).not.toContain("--session")
     })
 
+    test("writes do not pass explicit session args when a session name is set", async () => {
+      const { $, calls } = createMockShell()
+
+      const bb = new YamsBlackboard($, { sessionName: "my-session" })
+      await bb.registerAgent({
+        id: "agent-a",
+        name: "Agent A",
+        capabilities: ["coordination"],
+        status: "active",
+      })
+
+      const addCmd = calls.find(c => c.includes("yams add"))
+      expect(addCmd).toBeTruthy()
+      expect(addCmd).not.toContain("--session")
+    })
+
     test("instance_id filter is applied when provided", async () => {
       const { $, calls } = createMockShell({
         list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),

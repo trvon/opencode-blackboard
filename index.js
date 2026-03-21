@@ -31,9 +31,6 @@ class YamsBlackboard {
   nowISO() {
     return new Date().toISOString();
   }
-  sessionArg() {
-    return this.sessionName ? `--session ${this.shellEscape(this.sessionName)}` : "";
-  }
   shellEscape(s) {
     return `'${s.replace(/'/g, "'\\''")}'`;
   }
@@ -72,9 +69,9 @@ class YamsBlackboard {
       throw new Error(`Failed to parse YAMS JSON response: ${result}`);
     }
   }
-  async yamsStore(content, name, tags, extraArgs = "") {
+  async yamsStore(content, name, tags) {
     const escaped = this.shellEscape(content);
-    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} --metadata owner=opencode ${extraArgs}`;
+    const cmd = `echo ${escaped} | yams add - --name ${this.shellEscape(name)} --tags ${this.shellEscape(tags)} --metadata owner=opencode`;
     const output = await this.shell(cmd);
     this.putCachedContent(name, content);
     return output;
@@ -230,7 +227,7 @@ class YamsBlackboard {
       this.instanceTag(),
       ...agent.capabilities.map((c) => `capability:${c}`)
     ].join(",");
-    await this.yamsStore(content, `agents/${agent.id}.json`, tags, this.sessionArg());
+    await this.yamsStore(content, `agents/${agent.id}.json`, tags);
     return full;
   }
   async getAgent(agentId) {
@@ -318,7 +315,7 @@ ${finding.content}
     const md = this.findingToMarkdown(finding);
     const tags = this.buildFindingTags(finding);
     const name = `findings/${finding.topic}/${id}.md`;
-    await this.yamsStore(md, name, tags, this.sessionArg());
+    await this.yamsStore(md, name, tags);
     await this.reconcile();
     await this.triggerNotifications({
       event_type: "finding_created",
@@ -458,7 +455,7 @@ ${finding.content}
     };
     const content = JSON.stringify(task, null, 2);
     const tags = this.buildTaskTags(task);
-    await this.yamsStore(content, `tasks/${id}.json`, tags, this.sessionArg());
+    await this.yamsStore(content, `tasks/${id}.json`, tags);
     await this.reconcile();
     await this.triggerNotifications({
       event_type: "task_created",
@@ -676,7 +673,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       }
     };
     try {
-      await this.yamsStore(JSON.stringify(manifest), `contexts/${contextId}/compaction-manifest.json`, `manifest,ctx:${contextId},scope:persistent`, "");
+      await this.yamsStore(JSON.stringify(manifest), `contexts/${contextId}/compaction-manifest.json`, `manifest,ctx:${contextId},scope:persistent`);
     } catch {}
     return {
       markdown: await this.getContextSummary(contextId),
@@ -901,7 +898,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       `pattern:${subscription.pattern_type}:${subscription.pattern_value}`,
       "status:active"
     ].join(",");
-    await this.yamsStore(content, `subscriptions/${subscription.subscriber_id}/${id}.json`, tags, this.sessionArg());
+    await this.yamsStore(content, `subscriptions/${subscription.subscriber_id}/${id}.json`, tags);
     this.activeSubscriptionsCache = undefined;
     return subscription;
   }
@@ -1060,7 +1057,7 @@ ${blockedTasks.length ? `- ${blockedTasks.length} tasks blocked` : ""}
       `event:${notification.event_type}`,
       "status:unread"
     ].join(",");
-    await this.yamsStore(content, `notifications/${notification.recipient_id}/${id}.json`, tags, this.sessionArg());
+    await this.yamsStore(content, `notifications/${notification.recipient_id}/${id}.json`, tags);
     return notification;
   }
   async getUnreadNotifications(recipientId, limit = 20) {
