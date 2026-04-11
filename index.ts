@@ -21,7 +21,55 @@ import {
   ArtifactSchema,
   SubscriptionPatternType,
   SubscriptionFiltersSchema,
+  type CompactionManifest,
 } from "./types"
+
+function compareStrings(a: string, b: string): number {
+  return a.localeCompare(b)
+}
+
+function buildCompactionFingerprint(markdown: string, manifest: CompactionManifest): string {
+  const normalized = {
+    contextId: manifest.contextId,
+    markdown,
+    agentIds: [...manifest.agentIds].sort(compareStrings),
+    findingIds: [...manifest.findingIds]
+      .map((finding) => ({
+        id: finding.id,
+        topic: finding.topic,
+        severity: finding.severity,
+        status: finding.status,
+        confidence: finding.confidence,
+      }))
+      .sort((a, b) => {
+        return (
+          compareStrings(a.id, b.id) ||
+          compareStrings(a.topic, b.topic) ||
+          compareStrings(a.severity || "", b.severity || "") ||
+          compareStrings(a.status, b.status) ||
+          a.confidence - b.confidence
+        )
+      }),
+    taskIds: [...manifest.taskIds]
+      .map((task) => ({
+        id: task.id,
+        type: task.type,
+        status: task.status,
+        priority: task.priority,
+      }))
+      .sort((a, b) => {
+        return (
+          compareStrings(a.id, b.id) ||
+          compareStrings(a.type, b.type) ||
+          compareStrings(a.status, b.status) ||
+          a.priority - b.priority
+        )
+      }),
+    stats: manifest.stats,
+  }
+
+  return JSON.stringify(normalized)
+}
 
 // Named export for explicit imports
 export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) => {
@@ -29,6 +77,7 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
   // Cast $ to any to handle Bun shell type differences
   const blackboard = new YamsBlackboard($ as any, { defaultScope: "persistent" })
   let currentContextId: string | undefined
+  const lastCompactionFingerprintBySession = new Map<string, string>()
 
   return {
     // =========================================================================
@@ -53,6 +102,15 @@ export const YamsBlackboardPlugin: Plugin = async ({ $, project, directory }) =>
         // Generate both markdown and manifest
         const contextId = currentContextId || "default"
         const { markdown, manifest } = await blackboard.getContextSummaryWithManifest(contextId)
+        const sessionId = input.sessionID || "default"
+        const compactionKey = `${sessionId}:${contextId}`
+        const fingerprint = buildCompactionFingerprint(markdown, manifest)
+
+        if (lastCompactionFingerprintBySession.get(compactionKey) === fingerprint) {
+          return
+        }
+
+        lastCompactionFingerprintBySession.set(compactionKey, fingerprint)
 
         // Push markdown for human-readable context
         output.context.push(markdown)

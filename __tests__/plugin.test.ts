@@ -15,17 +15,49 @@ function createQuietablePromise<T>(promise: Promise<T>): Promise<T> & { quiet():
   return quietablePromise
 }
 
-// Mock shell function that captures commands
-function createMockShell() {
+// Mock shell that returns configurable responses
+function createMockShell(responses: Record<string, unknown> = {}) {
   const calls: string[] = []
-  const mockShell = mock((strings: TemplateStringsArray, ...values: any[]) => {
+  const defaultResponse = { stdout: Buffer.from("{}") }
+
+  const mockShell = mock((strings: TemplateStringsArray, ...values: unknown[]) => {
     const cmd = strings.reduce((acc, str, i) => acc + str + (values[i] ?? ""), "")
     calls.push(cmd)
-    // Return empty success response with .quiet() method
-    return createQuietablePromise(Promise.resolve({ stdout: Buffer.from("{}") }))
+
+    const resultPromise = (async () => {
+      for (const [pattern, response] of Object.entries(responses)) {
+        if (cmd.includes(pattern)) {
+          if (typeof response === "function") {
+            return response(cmd)
+          }
+          if (typeof response === "string") {
+            return { stdout: Buffer.from(response) }
+          }
+          return response
+        }
+      }
+
+      return defaultResponse
+    })()
+
+    return createQuietablePromise(resultPromise)
   })
+
   return { $: mockShell as any, calls }
 }
+
+const findingDoc = `---
+id: "f-1"
+agent_id: "scanner"
+topic: "security"
+confidence: 0.9
+status: "published"
+scope: "persistent"
+---
+
+# Repeated injection finding
+
+Updated content`
 
 describe("YamsBlackboardPlugin", () => {
   test("exports plugin as default and named export", async () => {
@@ -216,6 +248,77 @@ describe("YamsBlackboardPlugin", () => {
       const content = output.context.join("\n")
       expect(content).toContain("Blackboard Summary")
       expect(content).toContain("BLACKBOARD_MANIFEST")
+    })
+
+    test("experimental.session.compacting skips duplicate injections for the same session", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const firstOutput = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ sessionID: "test-session" } as any, firstOutput)
+
+      const secondOutput = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ sessionID: "test-session" } as any, secondOutput)
+
+      expect(firstOutput.context.some(s => s.includes("Blackboard Summary"))).toBe(true)
+      expect(secondOutput.context).toEqual([])
+    })
+
+    test("experimental.session.compacting reinjects when blackboard state changes", async () => {
+      let includeFinding = false
+      const { $ } = createMockShell({
+        list: (cmd: string) => {
+          if (cmd.includes("--tags") && cmd.includes("finding") && !cmd.includes("task")) {
+            return {
+              stdout: Buffer.from(JSON.stringify({
+                documents: includeFinding ? [{ name: "findings/security/f-1.md" }] : [],
+              })),
+            }
+          }
+          if (cmd.includes("--tags") && (cmd.includes("task") || cmd.includes("agent"))) {
+            return { stdout: Buffer.from(JSON.stringify({ documents: [] })) }
+          }
+          return { stdout: Buffer.from(JSON.stringify({ documents: [] })) }
+        },
+        "findings/security/f-1.md": () => ({ stdout: Buffer.from(findingDoc) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const firstOutput = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ sessionID: "test-session" } as any, firstOutput)
+
+      includeFinding = true
+
+      const secondOutput = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ sessionID: "test-session" } as any, secondOutput)
+
+      expect(firstOutput.context.some(s => s.includes("Blackboard Summary"))).toBe(true)
+      expect(secondOutput.context.some(s => s.includes("Repeated injection finding"))).toBe(true)
+      expect(secondOutput.context.some(s => s.includes("BLACKBOARD_MANIFEST"))).toBe(true)
+    })
+
+    test("experimental.session.compacting tracks duplicate suppression per session", async () => {
+      const { $ } = createMockShell({
+        list: () => ({ stdout: Buffer.from(JSON.stringify({ documents: [] })) }),
+      })
+      const plugin = await YamsBlackboardPlugin({
+        $, project: { path: "/test" } as any, directory: "/test",
+      })
+
+      const firstSessionOutput = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ sessionID: "session-a" } as any, firstSessionOutput)
+
+      const secondSessionOutput = { context: [] as string[] }
+      await plugin["experimental.session.compacting"]!({ sessionID: "session-b" } as any, secondSessionOutput)
+
+      expect(firstSessionOutput.context.some(s => s.includes("Blackboard Summary"))).toBe(true)
+      expect(secondSessionOutput.context.some(s => s.includes("Blackboard Summary"))).toBe(true)
     })
   })
 
