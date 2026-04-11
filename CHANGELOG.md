@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.3](https://github.com/trvon/opencode-blackboard/compare/v1.7.2...v1.7.3) (2026-04-11)
+
+
+### Bug Fixes
+
+* suggestion loop fix ([b55e13c](https://github.com/trvon/opencode-blackboard/commit/b55e13c2b926adf81e7b4f68c1592c8bb8126262))
+
 ## [1.7.2](https://github.com/trvon/opencode-blackboard/compare/v1.7.1...v1.7.2) (2026-03-21)
 
 
